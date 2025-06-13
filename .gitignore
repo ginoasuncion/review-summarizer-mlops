@@ -1,0 +1,53 @@
+# Byte-compiled / cache
+__pycache__/
+*.py[cod]
+*.so
+*.egg
+*.egg-info/
+*.pyd
+*.pyo
+
+# Virtual environments
+.env
+.venv
+.uv
+
+# Package/environment management
+poetry.lock
+Pipfile.lock
+
+# Jupyter notebooks
+.ipynb_checkpoints
+
+# Logs and runtime files
+*.log
+*.out
+*.pid
+*.jsonl
+*.tmp
+
+# System files
+.DS_Store
+Thumbs.db
+
+# IDE/project files
+.vscode/
+.idea/
+*.swp
+
+# ML experiment outputs
+mlruns/
+checkpoints/
+artifacts/
+runs/
+
+# Secrets and config
+.env.*
+*.secret
+secrets.yaml
+config.yaml
+
+# Docker
+*.container
+*.tar
+
