@@ -1,0 +1,30 @@
+name: Create branch from new issue
+
+on:
+  issues:
+    types: [opened]
+
+jobs:
+  create-branch:
+    runs-on: ubuntu-latest
+    if: github.event.issue.pull_request == null  # Only issues, not PRs
+    steps:
+    - name: Checkout default branch
+      uses: actions/checkout@v3
+      with:
+        token: ${{ secrets.GH_PAT }}
+
+    - name: Set up Git
+      run: |
+        git config --global user.name "github-actions[bot]"
+        git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+    - name: Create branch
+      run: |
+        ISSUE_NUMBER=${{ github.event.issue.number }}
+        ISSUE_TITLE="${{ github.event.issue.title }}"
+        SLUG=$(echo "$ISSUE_TITLE" | tr '[:upper:]' '[:lower:]' | tr ' ' '-' | tr -cd '[:alnum:]-')
+        BRANCH="issue-${ISSUE_NUMBER}-${SLUG}"
+        git checkout -b "$BRANCH"
+        git push origin "$BRANCH"
+
