@@ -1,0 +1,14 @@
+[project]
+name = "review-summarizer-mlops"
+version = "0.1.0"
+description = "Summarizes product reviews and transcripts using LLMs"
+authors = [
+    { name = "Xavier Eugenio Asuncion", email = "ginoasuncion@gmail.com" },
+    { name = "Irakli Kereleishvili", email = "kereleishviliirakli81@gmail.com" }
+]
+requires-python = ">=3.11"
+
+dependencies = [
+    "python-dotenv"
+]
+
