@@ -1,0 +1,17 @@
+name: Test GH_PAT Access
+
+on:
+  workflow_dispatch:  # You manually trigger this from GitHub
+
+jobs:
+  test-pat:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Print masked PAT length
+      run: |
+        echo "Testing GH_PAT secret..."
+        echo "Length of PAT: ${#GH_PAT}"
+      env:
+        GH_PAT: ${{ secrets.GH_PAT }}
+
