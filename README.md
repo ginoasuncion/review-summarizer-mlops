@@ -61,3 +61,20 @@ CI automatically checks:
 - Linting (Ruff)
 - Tests (Pytest)
 
+---
+
+## 🧠 GitHub Issue Automation
+
+This project uses a GitHub Actions workflow to **automatically create a new branch** whenever a new issue is opened.
+
+- Branches follow this naming convention:  
+  ```
+  issue-<number>-<slugified-title>
+  ```
+  Example: an issue titled `Add OpenAI summarizer module` creates a branch like  
+  `issue-7-add-openai-summarizer-module`
+
+- ✅ Requires a repository secret named `GH_PAT` with `repo` and `workflow` scopes.
+
+This improves traceability and links development work directly to tracked issues.
+
