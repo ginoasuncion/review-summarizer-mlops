@@ -1,9 +1,10 @@
 from fastapi import APIRouter, HTTPException
-from review_summarizer_mlops.models.schemas import SummarizeRequest, SummarizeResponse
 from review_summarizer_mlops.core.data_parser import fetch_product_data
 from review_summarizer_mlops.core.summarizer import summarize_feedback
+from review_summarizer_mlops.models.schemas import SummarizeRequest, SummarizeResponse
 
 router = APIRouter()
+
 
 @router.post("/summarize/", response_model=SummarizeResponse)
 async def summarize_feedback_route(request: SummarizeRequest):
@@ -13,4 +14,3 @@ async def summarize_feedback_route(request: SummarizeRequest):
         return {"summary": summary}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-

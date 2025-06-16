@@ -3,5 +3,5 @@ def fetch_product_data(product_name: str) -> list[str]:
     return [
         "This is a great product!",
         "The battery life could be better.",
-        "Amazing performance overall."
+        "Amazing performance overall.",
     ]
