@@ -21,3 +21,6 @@ line-length = 88
 target-version = "py311"
 select = ["E", "F", "I"]  # Common errors, formatting, imports
 
+[tool.setuptools]
+packages = { find = { where = ["src"] } }
+
