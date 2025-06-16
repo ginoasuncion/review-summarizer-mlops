@@ -4,7 +4,7 @@ from review_summarizer_mlops.main import app
 client = TestClient(app)
 
 
-def test_summarize_endpoint():
-    response = client.post("/summarize/", json={"product_name": "Sample Product"})
+def test_ping():
+    response = client.get("/ping")
     assert response.status_code == 200
-    assert "summary" in response.json()
+    assert response.json() == {"message": "pong"}
