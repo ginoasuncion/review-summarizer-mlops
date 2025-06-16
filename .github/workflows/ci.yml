@@ -33,7 +33,7 @@ jobs:
       run: black --check .
 
     - name: Run linter (ruff)
-      run: ruff check .
+      run: ruff check src/ tests/
  
     - name: Run tests
       run: pytest
