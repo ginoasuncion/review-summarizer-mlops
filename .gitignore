@@ -51,3 +51,7 @@ config.yaml
 *.container
 *.tar
 
+build/
+*.egg-info/
+__pycache__/
+

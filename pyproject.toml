@@ -29,6 +29,12 @@ target-version = "py311"
 [tool.ruff.lint]
 select = ["E", "F", "I"]
 
+[tool.setuptools]
+packages = { find = { where = ["src"] } }
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+
 [tool.mypy]
 python_version = "3.11"
 strict = true

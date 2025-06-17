@@ -33,11 +33,16 @@ jobs:
       run: black --check .
 
     - name: Run linter (ruff)
+<<<<<<< issue-4-create-an-api-to-summarize-data-using-llm
       run: ruff check .
 
     - name: Run type checker (mypy)  # ✅ NEW
       run: mypy .
 
+=======
+      run: ruff check src/ tests/
+ 
+>>>>>>> main
     - name: Run tests
       run: pytest
 
