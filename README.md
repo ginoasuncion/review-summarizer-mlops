@@ -28,19 +28,6 @@ uv pip install --system .
 
 ---
 
-## ⚡ Running the API
-
-Run the FastAPI server:
-
-```bash
-uvicorn main:app --reload
-```
-
-Visit the interactive docs at:  
-http://localhost:8000/docs
-
----
-
 ## 🧪 Running Tests
 
 To run all tests:
