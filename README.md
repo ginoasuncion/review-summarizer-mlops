@@ -1,6 +1,6 @@
-# Review Summarizer MLOps
+# 🚀 Review Summarizer MLOps
 
-An automated system that retrieves and summarizes product reviews or video transcripts using LLMs — built with MLOps best practices.
+An automated system that retrieves and summarizes product reviews or video transcripts using LLMs — built with FastAPI and MLOps best practices.
 
 ---
 
@@ -17,39 +17,62 @@ cd review-summarizer-mlops
 
 ```bash
 uv venv
-source .uv/bin/activate  # On macOS/Linux
-# .uv\Scripts\Activate.ps1  # On Windows
+source .venv/bin/activate  # or .uv/bin/activate if that's your setup
 ```
 
 ### 3. Install dependencies
 
 ```bash
-uv pip install .
+uv pip install --system .
 ```
 
-### 4. (Optional) Lock your environment for reproducibility
+---
+
+## ⚡ Running the API
+
+Run the FastAPI server:
 
 ```bash
-uv pip freeze > requirements.txt
+uvicorn main:app --reload
+```
+
+Visit the interactive docs at:  
+http://localhost:8000/docs
+
+---
+
+## 🧪 Running Tests
+
+To run all tests:
+
+```bash
+pytest
+```
+
+You can also check type correctness:
+
+```bash
+mypy .
 ```
 
 ---
 
 ## ✅ Developer Setup
 
-### Install and enable pre-commit
+### Install and enable pre-commit hooks
 
 ```bash
 uv pip install pre-commit
 pre-commit install
 ```
 
-### Run linting, formatting, and tests manually
+### Run manually
 
 ```bash
 black .
-ruff check .
+ruff check . --fix
 pytest
+mypy .
 ```
 
 ---
@@ -57,24 +80,42 @@ pytest
 ## 🔁 GitHub Actions
 
 CI automatically checks:
-- Code formatting (Black)
-- Linting (Ruff)
-- Tests (Pytest)
+- ✅ Formatting via **Black**
+- ✅ Linting via **Ruff**
+- ✅ Tests via **Pytest**
+- ✅ Type checking via **Mypy**
 
 ---
 
 ## 🧠 GitHub Issue Automation
 
-This project uses a GitHub Actions workflow to **automatically create a new branch** whenever a new issue is opened.
+This project uses a GitHub Actions workflow to **automatically create a new branch** when an issue is opened.
 
-- Branches follow this naming convention:  
+- Branches follow this format:
+
   ```
   issue-<number>-<slugified-title>
   ```
-  Example: an issue titled `Add OpenAI summarizer module` creates a branch like  
+
+  Example:  
   `issue-7-add-openai-summarizer-module`
 
-- ✅ Requires a repository secret named `GH_PAT` with `repo` and `workflow` scopes.
+- ✅ Requires a secret named `GH_PAT` with `repo` and `workflow` scopes.
 
-This improves traceability and links development work directly to tracked issues.
+---
 
+## 📂 Project Structure
+
+```
+├── main.py               # FastAPI app entry point
+├── tests/                # Pytest-based tests
+├── pyproject.toml        # Project config and dependencies
+├── requirements.txt
+└── README.md
+```
+
+---
+
+## 📦 Download
+
+[![Download](https://img.shields.io/badge/Download-ZIP-blue?logo=github)](https://github.com/ginoasuncion/review-summarizer-mlops/archive/refs/heads/main.zip)
