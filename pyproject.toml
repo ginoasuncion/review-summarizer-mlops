@@ -12,8 +12,10 @@ dependencies = [
     "fastapi",
     "uvicorn",
     "pydantic",
-    "pytest",
-    "mypy"
+    "mypy",
+    "requests",
+    "youtube-transcript-api",
+    "python-dotenv"
 ]
 
 [tool.setuptools.packages.find]
