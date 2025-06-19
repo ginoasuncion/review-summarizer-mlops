@@ -15,7 +15,9 @@ dependencies = [
     "mypy",
     "requests",
     "youtube-transcript-api",
-    "python-dotenv"
+    "python-dotenv",
+    "black",
+    "ruff"
 ]
 
 [tool.setuptools.packages.find]
