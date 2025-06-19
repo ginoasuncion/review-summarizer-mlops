@@ -37,4 +37,4 @@ select = ["E", "F", "I"]
 python_version = "3.11"
 strict = true
 ignore_missing_imports = true
-exclude = ["build/"]
+exclude = ["build/", "youtube-api/"]
