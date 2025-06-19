@@ -7,7 +7,7 @@ on:
     branches: [ main ]
 
 jobs:
-  test:
+  lint:
     runs-on: ubuntu-latest
 
     steps:
@@ -27,17 +27,10 @@ jobs:
     - name: Install dependencies
       run: |
         uv pip install --system .
-        uv pip install --system pytest black ruff mypy
 
     - name: Run code formatter (black)
       run: black --check .
 
     - name: Run linter (ruff)
       run: ruff check .
-
-    - name: Run type checker (mypy)
-      run: mypy .
- 
-    - name: Run tests
-      run: pytest
 

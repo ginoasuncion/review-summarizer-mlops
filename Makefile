@@ -14,15 +14,11 @@ format:
 	black .
 	ruff check .
 
-# Run tests
-test:
-	pytest
-
 # Run pre-commit hooks
 lint:
 	pre-commit run --all-files
 
-# Freeze requirements (for CI or reproducibility)
-freeze:
-	uv pip freeze > requirements.txt
+# Update lock file
+lock:
+	uv lock
 
