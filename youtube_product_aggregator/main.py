@@ -142,17 +142,29 @@ def check_query_completion(search_query: str) -> Dict[str, Any]:
         completed_videos = 0
         pending_videos = 0
         
+        bucket = storage_client.bucket(SOURCE_BUCKET)
+        
         for video in query_videos:
             video_id = video.get('video_id', '')
-            has_transcript = video.get('transcript_available', False)
-            has_summary = video.get('summary_available', False)
+            
+            # Check if transcript file exists
+            transcript_blob = bucket.blob(f"transcripts/{video_id}.txt")
+            has_transcript = transcript_blob.exists()
+            
+            # Check if summary file exists
+            summary_blob = bucket.blob(f"summaries/{video_id}.txt")
+            has_summary = summary_blob.exists()
             
             if has_transcript and has_summary:
                 completed_videos += 1
+                logger.info(f"Video {video_id} is complete (transcript: {has_transcript}, summary: {has_summary})")
             else:
                 pending_videos += 1
+                logger.info(f"Video {video_id} is pending (transcript: {has_transcript}, summary: {has_summary})")
         
         completed = completed_videos == total_videos and total_videos > 0
+        
+        logger.info(f"Query completion status for '{search_query}': {completed_videos}/{total_videos} videos complete")
         
         return {
             'completed': completed,
@@ -581,6 +593,23 @@ def query_monitoring_worker():
                         else:
                             logger.info(f"Query {search_query} still has {completion_status['pending_videos']} pending videos")
             
+            # Also check for any queries that might have been missed (not in pending list)
+            # Get all unique search queries from video metadata
+            all_videos = get_all_video_metadata()
+            all_queries = set()
+            for video in all_videos:
+                search_query = video.get('search_query', '')
+                if search_query:
+                    all_queries.add(search_query)
+            
+            # Check each query for completion
+            for search_query in all_queries:
+                if search_query not in pending_queries:
+                    completion_status = check_query_completion(search_query)
+                    if completion_status['completed']:
+                        logger.info(f"Found completed query not in pending list: {search_query}")
+                        queries_to_process.append(search_query)
+            
             # Process completed queries
             for search_query in queries_to_process:
                 process_query_complete(search_query)
@@ -659,6 +688,11 @@ def product_aggregator(cloud_event):
                     # Check if query is now complete
                     completion_status = check_query_completion(search_query)
                     logger.info(f"Transcript uploaded for {video_id}, query {search_query} status: {completion_status}")
+                    
+                    # If query is complete, process it immediately
+                    if completion_status['completed']:
+                        logger.info(f"Query {search_query} is complete, triggering processing")
+                        process_query_complete(search_query)
         
         elif file_name.startswith('summaries/') and file_name.endswith('.txt'):
             # New summary uploaded - check if this completes a query
@@ -671,6 +705,11 @@ def product_aggregator(cloud_event):
                     # Check if query is now complete
                     completion_status = check_query_completion(search_query)
                     logger.info(f"Summary uploaded for {video_id}, query {search_query} status: {completion_status}")
+                    
+                    # If query is complete, process it immediately
+                    if completion_status['completed']:
+                        logger.info(f"Query {search_query} is complete, triggering processing")
+                        process_query_complete(search_query)
         
         # Get current monitoring status
         with processing_lock:
