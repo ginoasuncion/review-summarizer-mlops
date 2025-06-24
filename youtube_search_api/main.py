@@ -23,7 +23,7 @@ PROJECT_ID = os.getenv("GCP_PROJECT_ID")
 
 class SearchRequest(BaseModel):
     query: str
-    max_results: int = 20
+    max_results: int = 5
 
 class SearchResponse(BaseModel):
     status: str
