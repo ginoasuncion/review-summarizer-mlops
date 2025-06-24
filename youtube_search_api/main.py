@@ -48,10 +48,24 @@ def search_youtube_with_oxylabs(query: str):
     url = 'https://realtime.oxylabs.io/v1/queries'
     payload = {
         'source': 'youtube_search',
-        'query': query
+        'query': query,
+        'context': [
+            {'key': 'language_code', 'value': 'en'},
+            {'key': 'search_type', 'value': 'video'}
+        ]
     }
 
-    response = requests.post(url, auth=(username, password), json=payload)
+    headers = {
+        'Content-Type': 'application/json'
+    }
+
+    response = requests.post(
+        url, 
+        auth=(username, password), 
+        json=payload,
+        headers=headers,
+        timeout=30
+    )
     
     if response.status_code != 200:
         logger.error(f"Oxylabs API error: {response.status_code} - {response.text}")
