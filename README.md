@@ -94,12 +94,60 @@ This project uses a GitHub Actions workflow to **automatically create a new bran
 ## 📂 Project Structure
 
 ```
-├── main.py               # FastAPI app entry point
-├── tests/                # Pytest-based tests
-├── pyproject.toml        # Project config and dependencies
+├── main.py                    # FastAPI app entry point
+├── tests/                     # Pytest-based tests
+├── youtube_search_api/        # YouTube Search API (Cloud Run)
+│   ├── main.py               # FastAPI application
+│   ├── requirements.txt      # Dependencies
+│   ├── Dockerfile           # Container configuration
+│   ├── cloudbuild.yaml      # Cloud Build config
+│   ├── deploy.sh            # Deployment script
+│   ├── setup.sh             # Setup script
+│   ├── test_api.py          # API tests
+│   └── README.md            # API documentation
+├── pyproject.toml            # Project config and dependencies
 ├── requirements.txt
 └── README.md
 ```
+
+---
+
+## 🎥 YouTube Search API
+
+The project includes a **YouTube Search API** component that:
+
+- 🔍 Searches YouTube videos using Oxylabs API
+- ☁️ Stores results in Google Cloud Storage
+- 🚀 Deployed on Google Cloud Run
+- 📊 Provides structured JSON responses
+
+### Quick Start
+
+```bash
+cd youtube_search_api
+./setup.sh
+```
+
+### Features
+
+- **FastAPI-based REST API**
+- **Oxylabs integration** for YouTube search
+- **Google Cloud Storage** for data persistence
+- **Cloud Run deployment** with auto-scaling
+- **Comprehensive testing** and monitoring
+- **Docker containerization**
+
+### Deployment
+
+```bash
+# Deploy to Cloud Run
+./deploy.sh
+
+# Or use Cloud Build
+gcloud builds submit --config cloudbuild.yaml .
+```
+
+For detailed documentation, see [`youtube_search_api/README.md`](youtube_search_api/README.md).
 
 ---
 
