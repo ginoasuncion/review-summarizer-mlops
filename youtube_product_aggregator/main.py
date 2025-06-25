@@ -36,6 +36,8 @@ VIDEO_METADATA_TABLE = f"{BIGQUERY_PROJECT}.{BIGQUERY_DATASET}.video_metadata"
 MIN_REVIEWS_PER_PRODUCT = int(os.environ.get('MIN_REVIEWS_PER_PRODUCT', '2'))
 WAIT_TIME_MINUTES = int(os.environ.get('WAIT_TIME_MINUTES', '3'))
 QUERY_BASED_PROCESSING = os.environ.get('QUERY_BASED_PROCESSING', 'true').lower() == 'true'
+MIN_COMPLETION_RATE = float(os.environ.get('MIN_COMPLETION_RATE', '0.5'))  # 50% completion rate for timeout
+QUERY_TIMEOUT_MINUTES = int(os.environ.get('QUERY_TIMEOUT_MINUTES', '5'))  # Default 5 minutes
 
 # OpenAI Configuration
 OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY')
@@ -102,11 +104,26 @@ def get_videos_by_query(search_query: str) -> List[Dict[str, Any]]:
         all_videos = get_all_video_metadata()
         query_videos = []
         
-        for video in all_videos:
+        logger.info(f"Looking for videos with query: '{search_query}'")
+        logger.info(f"Normalized search query: '{normalize_query(search_query)}'")
+        logger.info(f"Total videos found: {len(all_videos)}")
+        
+        for i, video in enumerate(all_videos):
             video_query = video.get('search_query', '')
+            video_id = video.get('video_id', '')
+            title = video.get('title', '')
+            
+            normalized_video_query = normalize_query(video_query)
+            normalized_search_query = normalize_query(search_query)
+            
+            logger.info(f"Video {i+1}: ID={video_id}, Title='{title[:50]}...', Query='{video_query}', Normalized='{normalized_video_query}'")
+            
             # Normalize queries for comparison
-            if normalize_query(video_query) == normalize_query(search_query):
+            if normalized_video_query == normalized_search_query:
                 query_videos.append(video)
+                logger.info(f"✓ MATCH FOUND for video {video_id}")
+            else:
+                logger.info(f"✗ NO MATCH for video {video_id} (normalized: '{normalized_video_query}' != '{normalized_search_query}')")
         
         logger.info(f"Found {len(query_videos)} videos for query: {search_query}")
         return query_videos
@@ -124,7 +141,7 @@ def normalize_query(query: str) -> str:
     normalized = re.sub(r'\s+', ' ', normalized)
     return normalized
 
-def check_query_completion(search_query: str) -> Dict[str, Any]:
+def check_query_completion(search_query: str, query_start_time: Optional[datetime] = None) -> Dict[str, Any]:
     """Check if all videos from a search query have completed processing"""
     try:
         query_videos = get_videos_by_query(search_query)
@@ -162,16 +179,37 @@ def check_query_completion(search_query: str) -> Dict[str, Any]:
                 pending_videos += 1
                 logger.info(f"Video {video_id} is pending (transcript: {has_transcript}, summary: {has_summary})")
         
-        completed = completed_videos == total_videos and total_videos > 0
+        # Check if all videos are complete
+        all_complete = completed_videos == total_videos and total_videos > 0
         
-        logger.info(f"Query completion status for '{search_query}': {completed_videos}/{total_videos} videos complete")
+        # Check timeout condition (if query has been waiting too long)
+        timeout_complete = False
+        if query_start_time and not all_complete:
+            current_time = datetime.now(timezone.utc)
+            time_elapsed = current_time - query_start_time
+            timeout_minutes = QUERY_TIMEOUT_MINUTES
+            
+            if time_elapsed.total_seconds() > (timeout_minutes * 60):
+                # Consider complete if we have at least MIN_COMPLETION_RATE completion and enough time has passed
+                completion_rate = completed_videos / total_videos if total_videos > 0 else 0
+                if completion_rate >= MIN_COMPLETION_RATE:  # 50% completion rate by default
+                    timeout_complete = True
+                    logger.info(f"Query '{search_query}' timed out after {timeout_minutes} minutes with {completion_rate:.1%} completion rate (threshold: {MIN_COMPLETION_RATE:.1%})")
+                else:
+                    logger.info(f"Query '{search_query}' timed out but completion rate {completion_rate:.1%} below threshold {MIN_COMPLETION_RATE:.1%}")
+        
+        completed = all_complete or timeout_complete
+        
+        logger.info(f"Query completion status for '{search_query}': {completed_videos}/{total_videos} videos complete (timeout: {timeout_complete})")
         
         return {
             'completed': completed,
             'total_videos': total_videos,
             'completed_videos': completed_videos,
             'pending_videos': pending_videos,
-            'search_query': search_query
+            'search_query': search_query,
+            'timeout_complete': timeout_complete,
+            'completion_rate': completed_videos / total_videos if total_videos > 0 else 0
         }
         
     except Exception as e:
@@ -379,7 +417,7 @@ def save_product_summary(product_name: str, summary: str, videos: List[Dict[str,
         logger.error(f"Error saving product summary: {e}")
         return ""
 
-def save_product_metadata(product_name: str, summary_file: str, videos: List[Dict[str, Any]], search_query: str):
+def save_product_metadata(product_name: str, summary_file: str, videos: List[Dict[str, Any]], search_query: str, transcript_file: str = ""):
     """Save product metadata to GCS"""
     try:
         bucket = storage_client.bucket(PRODUCTS_BUCKET)
@@ -389,6 +427,7 @@ def save_product_metadata(product_name: str, summary_file: str, videos: List[Dic
             'product_name': product_name,
             'search_query': search_query,
             'summary_file': summary_file,
+            'transcript_file': transcript_file,
             'total_reviews': len(videos),
             'total_views': sum(v.get('views', 0) for v in videos),
             'average_views': sum(v.get('views', 0) for v in videos) // len(videos),
@@ -418,18 +457,49 @@ def save_product_metadata(product_name: str, summary_file: str, videos: List[Dic
         return ""
 
 def insert_product_summary_to_bigquery(product_name: str, summary_content: str, videos: List[Dict[str, Any]], search_query: str, summary_file: str):
-    """Insert product summary data to BigQuery"""
+    """Insert product summary data to BigQuery with duplicate prevention"""
     try:
         # Calculate total views
         total_views = sum(video.get('view_count', 0) for video in videos)
         average_views = total_views / len(videos) if videos else 0
+        total_reviews = len(videos)
+        
+        # Check if product already exists
+        check_query = f"""
+        SELECT total_reviews, processed_at
+        FROM `{PRODUCT_SUMMARIES_TABLE}`
+        WHERE product_name = '{product_name}' AND search_query = '{search_query}'
+        ORDER BY processed_at DESC
+        LIMIT 1
+        """
+        
+        try:
+            query_job = bigquery_client.query(check_query)
+            existing_results = list(query_job.result())
+            
+            if existing_results:
+                existing_reviews = existing_results[0].total_reviews
+                existing_processed_at = existing_results[0].processed_at
+                
+                # Only update if we have more reviews or if it's been more than 1 hour
+                current_time = datetime.now(timezone.utc)
+                time_diff = current_time - existing_processed_at.replace(tzinfo=timezone.utc)
+                
+                if total_reviews <= existing_reviews and time_diff.total_seconds() < 3600:  # 1 hour
+                    logger.info(f"Product {product_name} already exists with {existing_reviews} reviews (current: {total_reviews}), skipping insert")
+                    return True
+                else:
+                    logger.info(f"Updating product {product_name} - existing: {existing_reviews} reviews, new: {total_reviews} reviews")
+        except Exception as e:
+            logger.warning(f"Error checking existing product {product_name}: {e}")
+            # Continue with insert if check fails
         
         # Prepare row data
         row = {
             'product_name': product_name,
             'search_query': search_query,
             'summary_content': summary_content,
-            'total_reviews': len(videos),
+            'total_reviews': total_reviews,
             'total_views': total_views,
             'average_views': average_views,
             'processed_at': datetime.now(timezone.utc).isoformat(),
@@ -453,8 +523,36 @@ def insert_product_summary_to_bigquery(product_name: str, summary_content: str, 
         return False
 
 def insert_video_metadata_to_bigquery(videos: List[Dict[str, Any]]):
-    """Insert video metadata to BigQuery"""
+    """Insert video metadata to BigQuery with duplicate prevention"""
     try:
+        if not videos:
+            logger.warning("No video metadata to insert")
+            return False
+        
+        # Get the search query from the first video
+        search_query = videos[0].get('search_query', '')
+        if not search_query:
+            logger.warning("No search query found in videos")
+            return False
+        
+        # Check if videos for this search query already exist
+        check_query = f"""
+        SELECT COUNT(*) as existing_count
+        FROM `{VIDEO_METADATA_TABLE}`
+        WHERE search_query = '{search_query}'
+        """
+        
+        try:
+            query_job = bigquery_client.query(check_query)
+            existing_results = list(query_job.result())
+            
+            if existing_results and existing_results[0].existing_count > 0:
+                logger.info(f"Video metadata for search query '{search_query}' already exists ({existing_results[0].existing_count} records), skipping insert")
+                return True
+        except Exception as e:
+            logger.warning(f"Error checking existing video metadata for search query {search_query}: {e}")
+            # Continue with insert if check fails
+        
         rows = []
         current_time = datetime.now(timezone.utc).isoformat()
         
@@ -505,8 +603,37 @@ def process_query_complete(search_query: str):
             logger.warning(f"No videos found for query: {search_query}")
             return False
         
-        # Group videos by product
-        product_groups = group_videos_by_product(query_videos)
+        # Filter videos to only include those with both transcript and summary
+        bucket = storage_client.bucket(SOURCE_BUCKET)
+        complete_videos = []
+        incomplete_videos = []
+        
+        for video in query_videos:
+            video_id = video.get('video_id', '')
+            
+            # Check if transcript file exists
+            transcript_blob = bucket.blob(f"transcripts/{video_id}.txt")
+            has_transcript = transcript_blob.exists()
+            
+            # Check if summary file exists
+            summary_blob = bucket.blob(f"summaries/{video_id}.txt")
+            has_summary = summary_blob.exists()
+            
+            if has_transcript and has_summary:
+                complete_videos.append(video)
+                logger.info(f"Video {video_id} is complete and will be processed")
+            else:
+                incomplete_videos.append(video)
+                logger.info(f"Video {video_id} is incomplete (transcript: {has_transcript}, summary: {has_summary}) and will be skipped")
+        
+        if not complete_videos:
+            logger.warning(f"No complete videos found for query: {search_query}")
+            return False
+        
+        logger.info(f"Processing {len(complete_videos)} complete videos out of {len(query_videos)} total videos for query: {search_query}")
+        
+        # Group complete videos by product
+        product_groups = group_videos_by_product(complete_videos)
         if not product_groups:
             logger.warning(f"No product groups found for query: {search_query}")
             return False
@@ -517,7 +644,7 @@ def process_query_complete(search_query: str):
             try:
                 # Only process if we have enough reviews
                 if len(videos) >= MIN_REVIEWS_PER_PRODUCT:
-                    logger.info(f"Processing product: {product_name} with {len(videos)} reviews")
+                    logger.info(f"Processing product: {product_name} with {len(videos)} complete reviews")
                     
                     # Generate comprehensive summary
                     summary = generate_product_summary(product_name, videos, search_query)
@@ -527,7 +654,11 @@ def process_query_complete(search_query: str):
                     
                     # Save summary and metadata
                     summary_file = save_product_summary(product_name, summary, videos, search_query)
-                    metadata_file = save_product_metadata(product_name, summary_file, videos, search_query)
+                    
+                    # Save concatenated transcripts
+                    transcript_file = save_concatenated_transcripts(product_name, videos, search_query)
+                    
+                    metadata_file = save_product_metadata(product_name, summary_file, videos, search_query, transcript_file)
                     
                     if summary_file and metadata_file:
                         # Insert to BigQuery
@@ -541,12 +672,15 @@ def process_query_complete(search_query: str):
                             'product_name': product_name,
                             'review_count': len(videos),
                             'summary_file': summary_file,
+                            'transcript_file': transcript_file,
                             'metadata_file': metadata_file
                         })
                         
                         logger.info(f"Successfully processed product: {product_name}")
+                    else:
+                        logger.warning(f"Failed to save files for product: {product_name}")
                 else:
-                    logger.info(f"Skipping product {product_name} - only {len(videos)} reviews (need {MIN_REVIEWS_PER_PRODUCT})")
+                    logger.info(f"Skipping product {product_name} - only {len(videos)} complete reviews (need {MIN_REVIEWS_PER_PRODUCT})")
                 
             except Exception as e:
                 logger.error(f"Error processing product {product_name}: {e}")
@@ -554,12 +688,11 @@ def process_query_complete(search_query: str):
         
         logger.info(f"Successfully processed {len(processed_products)} products for query: {search_query}")
         
-        # Insert all video metadata to BigQuery
-        all_videos = get_videos_by_query(search_query)
-        if all_videos:
-            bigquery_video_success = insert_video_metadata_to_bigquery(all_videos)
+        # Insert all video metadata to BigQuery (including incomplete ones for reference)
+        if query_videos:
+            bigquery_video_success = insert_video_metadata_to_bigquery(query_videos)
             if bigquery_video_success:
-                logger.info(f"Successfully inserted {len(all_videos)} video metadata records to BigQuery")
+                logger.info(f"Successfully inserted {len(query_videos)} video metadata records to BigQuery")
             else:
                 logger.warning(f"Failed to insert video metadata to BigQuery for query: {search_query}")
         
@@ -583,8 +716,8 @@ def query_monitoring_worker():
                     wait_until = last_update + timedelta(minutes=WAIT_TIME_MINUTES)
                     
                     if current_time >= wait_until:
-                        # Check if query is complete
-                        completion_status = check_query_completion(search_query)
+                        # Check if query is complete (pass start time for timeout checking)
+                        completion_status = check_query_completion(search_query, last_update)
                         
                         if completion_status['completed']:
                             queries_to_process.append(search_query)
@@ -602,10 +735,10 @@ def query_monitoring_worker():
                 if search_query:
                     all_queries.add(search_query)
             
-            # Check each query for completion
+            # Check each query for completion (use current time as start time for missed queries)
             for search_query in all_queries:
                 if search_query not in pending_queries:
-                    completion_status = check_query_completion(search_query)
+                    completion_status = check_query_completion(search_query, current_time)
                     if completion_status['completed']:
                         logger.info(f"Found completed query not in pending list: {search_query}")
                         queries_to_process.append(search_query)
@@ -686,7 +819,7 @@ def product_aggregator(cloud_event):
                 search_query = video_metadata.get('search_query', '')
                 if search_query:
                     # Check if query is now complete
-                    completion_status = check_query_completion(search_query)
+                    completion_status = check_query_completion(search_query, datetime.now(timezone.utc))
                     logger.info(f"Transcript uploaded for {video_id}, query {search_query} status: {completion_status}")
                     
                     # If query is complete, process it immediately
@@ -703,7 +836,7 @@ def product_aggregator(cloud_event):
                 search_query = video_metadata.get('search_query', '')
                 if search_query:
                     # Check if query is now complete
-                    completion_status = check_query_completion(search_query)
+                    completion_status = check_query_completion(search_query, datetime.now(timezone.utc))
                     logger.info(f"Summary uploaded for {video_id}, query {search_query} status: {completion_status}")
                     
                     # If query is complete, process it immediately
@@ -832,7 +965,7 @@ def force_process_query():
     try:
         data = request.get_json()
         search_query = data.get('search_query')
-        min_completed = data.get('min_completed', MIN_REVIEWS_PER_PRODUCT)
+        min_completed = data.get('min_completed', 1)  # Default to 1 instead of MIN_REVIEWS_PER_PRODUCT
         
         if not search_query:
             return jsonify({'error': 'search_query is required'}), 400
@@ -840,9 +973,17 @@ def force_process_query():
         # Check current completion status
         completion_status = check_query_completion(search_query)
         
+        logger.info(f"Force processing query: {search_query}")
+        logger.info(f"Completion status: {completion_status['completed_videos']}/{completion_status['total_videos']} videos complete")
+        logger.info(f"Minimum required: {min_completed}")
+        
         if completion_status['completed_videos'] < min_completed:
             return jsonify({
-                'error': f'Not enough completed videos. Need at least {min_completed}, have {completion_status["completed_videos"]}'
+                'success': False,
+                'error': f'Not enough completed videos. Need at least {min_completed}, have {completion_status["completed_videos"]}',
+                'query': search_query,
+                'completed_videos': completion_status['completed_videos'],
+                'total_videos': completion_status['total_videos']
             }), 400
         
         # Force process the query
@@ -853,12 +994,86 @@ def force_process_query():
             'success': success,
             'query': search_query,
             'completed_videos': completion_status['completed_videos'],
-            'total_videos': completion_status['total_videos']
+            'total_videos': completion_status['total_videos'],
+            'message': f"Processed query with {completion_status['completed_videos']} complete videos"
         })
         
     except Exception as e:
         logger.error(f"Error in force_process_query: {e}")
         return jsonify({'error': str(e)}), 500
+
+def save_concatenated_transcripts(product_name: str, videos: List[Dict[str, Any]], search_query: str) -> str:
+    """Concatenate and save all transcripts for a product to GCS"""
+    try:
+        bucket = storage_client.bucket(PRODUCTS_BUCKET)
+        
+        # Collect all transcripts
+        concatenated_transcripts = []
+        total_transcripts = 0
+        
+        for i, video in enumerate(videos, 1):
+            video_id = video.get('video_id', '')
+            title = video.get('title', '')
+            channel = video.get('channel_name', '')
+            views = video.get('views', 0)
+            duration = video.get('duration', '')
+            
+            transcript_content = get_transcript_content(video_id)
+            
+            if transcript_content:
+                # Add video metadata header
+                video_header = f"""
+{'='*80}
+VIDEO {i}: {title}
+Channel: {channel}
+Views: {views:,}
+Duration: {duration}
+Video ID: {video_id}
+{'='*80}
+
+"""
+                concatenated_transcripts.append(video_header)
+                concatenated_transcripts.append(transcript_content)
+                concatenated_transcripts.append("\n\n")
+                total_transcripts += 1
+        
+        if not concatenated_transcripts:
+            logger.warning(f"No transcripts available for product: {product_name}")
+            return ""
+        
+        # Create the full concatenated content
+        full_content = "".join(concatenated_transcripts)
+        
+        # Add overall header
+        overall_header = f"""
+CONCATENATED TRANSCRIPTS FOR PRODUCT REVIEWS
+{'='*80}
+Product: {product_name}
+Search Query: {search_query}
+Total Videos: {len(videos)}
+Videos with Transcripts: {total_transcripts}
+Generated: {datetime.now(timezone.utc).isoformat()}
+{'='*80}
+
+"""
+        
+        final_content = overall_header + full_content
+        
+        # Save to GCS
+        timestamp = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
+        product_name_clean = re.sub(r'[^\w\s-]', '', product_name).replace(' ', '_')
+        search_query_clean = re.sub(r'[^\w\s-]', '', search_query).replace(' ', '_')
+        file_name = f"products/{search_query_clean}_{product_name_clean}_{timestamp}_transcripts.txt"
+        
+        blob = bucket.blob(file_name)
+        blob.upload_from_string(final_content, content_type='text/plain')
+        
+        logger.info(f"Saved concatenated transcripts to: gs://{PRODUCTS_BUCKET}/{file_name}")
+        return f"gs://{PRODUCTS_BUCKET}/{file_name}"
+        
+    except Exception as e:
+        logger.error(f"Error saving concatenated transcripts: {e}")
+        return ""
 
 # Start the query monitoring worker thread
 if QUERY_BASED_PROCESSING:

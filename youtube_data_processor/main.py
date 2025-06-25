@@ -180,8 +180,8 @@ def extract_search_query_from_filename(file_name: str) -> str:
     """
     Extract search query from the filename.
     
-    Expected filename format: search_query_YYYYMMDD_HHMMSS.json
-    or: search_query_with_spaces_YYYYMMDD_HHMMSS.json
+    Expected filename format: raw_data/youtube_search_search_query_YYYYMMDD_HHMMSS.json
+    or: youtube_search_search_query_YYYYMMDD_HHMMSS.json
     
     Args:
         file_name: The filename to parse
@@ -190,8 +190,16 @@ def extract_search_query_from_filename(file_name: str) -> str:
         The search query extracted from the filename
     """
     try:
+        # Remove the raw_data/ prefix if present
+        if file_name.startswith('raw_data/'):
+            file_name = file_name[9:]  # Remove 'raw_data/' prefix
+        
         # Remove .json extension
         base_name = os.path.splitext(file_name)[0]
+        
+        # Remove 'youtube_search_' prefix if present
+        if base_name.startswith('youtube_search_'):
+            base_name = base_name[15:]  # Remove 'youtube_search_' prefix
         
         # Split by underscore and find the timestamp pattern
         parts = base_name.split('_')
@@ -431,7 +439,11 @@ def youtube_data_processor(cloud_event: CloudEvent) -> str:
             return "No content found"
 
         processed_videos = []
-        for video in first_result['content']:
+        # Limit to first 5 videos to match max_results from search API
+        max_videos_to_process = 5
+        videos_to_process = first_result['content'][:max_videos_to_process]
+        
+        for video in videos_to_process:
             video_data = parse_video_data(video, raw_data)
             if not video_data:
                 continue
@@ -453,7 +465,7 @@ def youtube_data_processor(cloud_event: CloudEvent) -> str:
             
             processed_videos.append(video_id)
 
-        logger.info(f"Successfully processed {len(processed_videos)} videos from search: '{search_query}'")
+        logger.info(f"Successfully processed {len(processed_videos)} videos from search: '{search_query}' (limited to {max_videos_to_process})")
         return f"Processed {len(processed_videos)} videos from search: '{search_query}'"
 
     except Exception as e:

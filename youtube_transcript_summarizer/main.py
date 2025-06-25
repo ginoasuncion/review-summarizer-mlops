@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from typing import Optional, Dict, Any
 from flask import Flask, request, jsonify
 from google.cloud import storage
+from google.cloud import bigquery
 from google.cloud.exceptions import NotFound
 import base64
 
@@ -15,11 +16,17 @@ logger = logging.getLogger(__name__)
 
 # Initialize clients
 storage_client = storage.Client()
+bigquery_client = bigquery.Client()
 
 # Configuration
 PROJECT_ID = os.environ.get('GCP_PROJECT_ID', 'buoyant-yew-463209-k5')
 SOURCE_BUCKET = os.environ.get('SOURCE_BUCKET', 'youtube-processed-data-bucket')
 SUMMARIES_BUCKET = os.environ.get('SUMMARIES_BUCKET', 'youtube-processed-data-bucket')
+
+# BigQuery Configuration
+BIGQUERY_DATASET = os.environ.get('BIGQUERY_DATASET', 'youtube_reviews')
+BIGQUERY_PROJECT = os.environ.get('BIGQUERY_PROJECT', PROJECT_ID)
+VIDEO_METADATA_TABLE = f"{BIGQUERY_PROJECT}.{BIGQUERY_DATASET}.video_metadata"
 
 # OpenAI Configuration
 OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY')
@@ -170,6 +177,45 @@ def update_video_metadata_with_summary(video_id: str, summary_file: str):
         logger.error(f"Error updating video metadata: {e}")
         return False
 
+def update_video_metadata_in_bigquery(video_metadata: Dict[str, Any], summary_file: str, summary_content: str):
+    """Update video metadata in BigQuery with summary information"""
+    try:
+        # Prepare the row data for BigQuery
+        row = {
+            'video_id': video_metadata.get('video_id', ''),
+            'title': video_metadata.get('title', ''),
+            'channel_name': video_metadata.get('channel_name', ''),
+            'view_count': video_metadata.get('views', 0),
+            'duration': video_metadata.get('duration', ''),
+            'url': video_metadata.get('url', ''),
+            'search_query': video_metadata.get('search_query', ''),
+            'processed_at': video_metadata.get('processed_at', datetime.now(timezone.utc).isoformat()),
+            'transcript_available': True,  # Since we have a transcript if we're generating a summary
+            'summary_available': True,
+            'transcript_file': f"gs://{SOURCE_BUCKET}/transcripts/{video_metadata.get('video_id', '')}.txt",
+            'summary_file': summary_file,
+            'summary_content': summary_content,
+            'summary_processed_at': datetime.now(timezone.utc).isoformat()
+        }
+        
+        # Insert the row into BigQuery
+        table_id = VIDEO_METADATA_TABLE
+        table = bigquery_client.get_table(table_id)
+        
+        # Insert the row (BigQuery will handle duplicates based on the table's primary key)
+        errors = bigquery_client.insert_rows_json(table, [row])
+        
+        if errors:
+            logger.error(f"BigQuery insert errors: {errors}")
+            return False
+        
+        logger.info(f"Successfully updated video metadata in BigQuery: {video_metadata.get('video_id', '')}")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Error updating video metadata in BigQuery: {e}")
+        return False
+
 def transcript_summarizer(cloud_event):
     """Process transcript files and generate summaries"""
     try:
@@ -249,6 +295,9 @@ def transcript_summarizer(cloud_event):
         if gcs_path:
             # Update video metadata with summary information
             update_video_metadata_with_summary(video_id, gcs_path)
+            
+            # Update video metadata in BigQuery
+            update_video_metadata_in_bigquery(video_metadata, gcs_path, summary)
             
             logger.info(f"Successfully processed summary for video {video_id}")
             return {

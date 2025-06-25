@@ -13,7 +13,7 @@ QUERY_BASED_PROCESSING=${QUERY_BASED_PROCESSING:-true}
 
 # Build and push Docker image
 echo "Building Docker image..."
-docker build -t $IMAGE_NAME .
+docker build --platform linux/amd64 -t $IMAGE_NAME .
 
 echo "Pushing Docker image..."
 docker push $IMAGE_NAME

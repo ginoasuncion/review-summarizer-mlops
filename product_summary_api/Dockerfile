@@ -1,6 +1,5 @@
 FROM python:3.9-slim
 
-# Set working directory
 WORKDIR /app
 
 # Copy requirements and install dependencies
@@ -14,4 +13,4 @@ COPY main.py .
 EXPOSE 8080
 
 # Run the application
-CMD ["python", "main.py"] 
+CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "1", "main:app"] 
