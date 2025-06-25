@@ -255,6 +255,234 @@ def insert_product_summary_to_bigquery(product_name: str, search_query: str, sum
         logger.error(f"Error inserting product summary to BigQuery: {e}")
         return False
 
+def check_if_new_videos_available(search_query: str, existing_summary: Optional[Dict[str, Any]]) -> bool:
+    """Check if there are new videos available for a search query that weren't in the previous summary"""
+    try:
+        # Get current video IDs for this query
+        current_videos = get_video_summaries_by_query(search_query)
+        current_video_ids = set(video['video_id'] for video in current_videos)
+        
+        if not existing_summary:
+            # No existing summary, so any videos are "new"
+            return len(current_video_ids) > 0
+        
+        # Get the video IDs that were used in the existing summary
+        # We'll need to store this information in the summary or track it separately
+        # For now, we'll assume if the number of videos has changed, there are new videos
+        existing_video_count = existing_summary.get('total_reviews', 0)
+        current_video_count = len(current_video_ids)
+        
+        if current_video_count > existing_video_count:
+            logger.info(f"New videos detected for query '{search_query}': {existing_video_count} -> {current_video_count}")
+            return True
+        
+        logger.info(f"No new videos detected for query '{search_query}': {current_video_count} videos (same as before)")
+        return False
+        
+    except Exception as e:
+        logger.error(f"Error checking for new videos for query {search_query}: {e}")
+        return True  # Default to True to be safe
+
+def should_generate_summary(search_query: str) -> tuple[bool, Optional[Dict[str, Any]], str]:
+    """Determine if a summary should be generated and why"""
+    try:
+        # Check if summary already exists
+        existing_summary = check_existing_product_summary(search_query)
+        
+        if not existing_summary:
+            # No existing summary, should generate
+            return True, None, "new_query"
+        
+        # Check if there are new videos
+        has_new_videos = check_if_new_videos_available(search_query, existing_summary)
+        
+        if has_new_videos:
+            return True, existing_summary, "new_videos"
+        
+        # No new videos, no need to generate
+        return False, existing_summary, "no_changes"
+        
+    except Exception as e:
+        logger.error(f"Error determining if summary should be generated for query {search_query}: {e}")
+        return True, None, "error"
+
+def get_all_search_queries_with_videos() -> List[str]:
+    """Get all unique search queries that have video summaries"""
+    try:
+        query = f"""
+        SELECT DISTINCT search_query
+        FROM `{VIDEO_METADATA_TABLE}`
+        WHERE summary_available = true 
+        AND summary_content IS NOT NULL
+        ORDER BY search_query
+        """
+        
+        query_job = bigquery_client.query(query)
+        results = list(query_job.result())
+        
+        search_queries = [row.search_query for row in results]
+        logger.info(f"Found {len(search_queries)} search queries with video summaries")
+        return search_queries
+        
+    except Exception as e:
+        logger.error(f"Error getting search queries with videos: {e}")
+        return []
+
+def get_existing_summary_queries() -> List[str]:
+    """Get all search queries that already have product summaries"""
+    try:
+        query = f"""
+        SELECT DISTINCT search_query
+        FROM `{PRODUCT_SUMMARIES_TABLE}`
+        ORDER BY search_query
+        """
+        
+        query_job = bigquery_client.query(query)
+        results = list(query_job.result())
+        
+        existing_queries = [row.search_query for row in results]
+        logger.info(f"Found {len(existing_queries)} existing product summaries")
+        return existing_queries
+        
+    except Exception as e:
+        logger.error(f"Error getting existing summary queries: {e}")
+        return []
+
+def auto_process_summaries() -> Dict[str, Any]:
+    """Automatically process all search queries that need summaries"""
+    try:
+        logger.info("Starting automatic summary processing...")
+        
+        # Get all search queries with videos
+        all_queries = get_all_search_queries_with_videos()
+        if not all_queries:
+            return {
+                "status": "no_data",
+                "message": "No search queries with video summaries found",
+                "processed": 0,
+                "skipped": 0,
+                "errors": 0,
+                "results": []
+            }
+        
+        # Get existing summary queries
+        existing_queries = get_existing_summary_queries()
+        
+        # Find queries that need processing
+        queries_to_process = []
+        for query in all_queries:
+            if query not in existing_queries:
+                queries_to_process.append((query, "new_query"))
+            else:
+                # Check if there are new videos
+                should_generate, _, reason = should_generate_summary(query)
+                if should_generate:
+                    queries_to_process.append((query, reason))
+        
+        logger.info(f"Found {len(queries_to_process)} queries that need processing")
+        
+        # Process each query
+        results = []
+        processed = 0
+        skipped = 0
+        errors = 0
+        
+        for search_query, reason in queries_to_process:
+            try:
+                logger.info(f"Processing query: {search_query} (reason: {reason})")
+                
+                # Get video summaries for the query
+                videos = get_video_summaries_by_query(search_query)
+                
+                if not videos or len(videos) < 2:
+                    logger.warning(f"Skipping {search_query}: insufficient videos ({len(videos) if videos else 0})")
+                    skipped += 1
+                    results.append({
+                        "search_query": search_query,
+                        "status": "skipped",
+                        "reason": f"insufficient_videos ({len(videos) if videos else 0})"
+                    })
+                    continue
+                
+                # Generate unified product summary
+                unified_summary = generate_unified_product_summary(search_query, videos)
+                
+                if not unified_summary:
+                    logger.error(f"Failed to generate summary for {search_query}")
+                    errors += 1
+                    results.append({
+                        "search_query": search_query,
+                        "status": "error",
+                        "reason": "generation_failed"
+                    })
+                    continue
+                
+                # Extract product name
+                product_name = extract_product_name(search_query)
+                
+                # Insert into BigQuery
+                bigquery_success = insert_product_summary_to_bigquery(product_name, search_query, unified_summary, videos)
+                
+                if not bigquery_success:
+                    logger.error(f"Failed to save summary to BigQuery for {search_query}")
+                    errors += 1
+                    results.append({
+                        "search_query": search_query,
+                        "status": "error",
+                        "reason": "bigquery_save_failed"
+                    })
+                    continue
+                
+                # Success
+                processed += 1
+                total_views = sum(video['view_count'] for video in videos)
+                average_views = total_views / len(videos)
+                
+                results.append({
+                    "search_query": search_query,
+                    "status": "success",
+                    "product_name": product_name,
+                    "total_reviews": len(videos),
+                    "total_views": total_views,
+                    "average_views": average_views,
+                    "reason": reason
+                })
+                
+                logger.info(f"Successfully processed {search_query}")
+                
+            except Exception as e:
+                logger.error(f"Error processing {search_query}: {e}")
+                errors += 1
+                results.append({
+                    "search_query": search_query,
+                    "status": "error",
+                    "reason": str(e)
+                })
+        
+        logger.info(f"Auto-processing complete: {processed} processed, {skipped} skipped, {errors} errors")
+        
+        return {
+            "status": "completed",
+            "message": f"Auto-processing complete: {processed} processed, {skipped} skipped, {errors} errors",
+            "processed": processed,
+            "skipped": skipped,
+            "errors": errors,
+            "total_queries": len(all_queries),
+            "queries_to_process": len(queries_to_process),
+            "results": results
+        }
+        
+    except Exception as e:
+        logger.error(f"Error in auto_process_summaries: {e}")
+        return {
+            "status": "error",
+            "message": str(e),
+            "processed": 0,
+            "skipped": 0,
+            "errors": 1,
+            "results": []
+        }
+
 @app.route('/health', methods=['GET'])
 def health_check():
     """Health check endpoint"""
@@ -274,16 +502,18 @@ def generate_product_summary():
         if not search_query:
             return jsonify({"error": "search_query is required"}), 400
         
-        logger.info(f"Generating product summary for query: {search_query}")
+        logger.info(f"Checking if summary should be generated for query: {search_query}")
         
-        # Check if summary already exists
-        existing_summary = check_existing_product_summary(search_query)
-        if existing_summary:
-            logger.info(f"Product summary already exists for query: {search_query}")
+        # Check if we should generate a summary
+        should_generate, existing_summary, reason = should_generate_summary(search_query)
+        
+        if not should_generate:
+            logger.info(f"No need to generate summary for query '{search_query}': {reason}")
             return jsonify({
-                "status": "exists",
-                "message": "Product summary already exists",
-                "data": existing_summary
+                "status": "no_changes",
+                "message": f"No new videos available for query: {search_query}",
+                "data": existing_summary,
+                "reason": reason
             })
         
         # Get video summaries for the query
@@ -310,7 +540,7 @@ def generate_product_summary():
         # Extract product name
         product_name = extract_product_name(search_query)
         
-        # Insert into BigQuery
+        # Insert into BigQuery (this will overwrite existing summary if reason is "new_videos")
         bigquery_success = insert_product_summary_to_bigquery(product_name, search_query, unified_summary, videos)
         
         if not bigquery_success:
@@ -332,12 +562,13 @@ def generate_product_summary():
             "processed_at": datetime.now(timezone.utc).isoformat()
         }
         
-        logger.info(f"Successfully generated product summary for: {search_query}")
+        logger.info(f"Successfully generated product summary for: {search_query} (reason: {reason})")
         
         return jsonify({
             "status": "success",
-            "message": "Product summary generated successfully",
-            "data": response_data
+            "message": f"Product summary generated successfully (reason: {reason})",
+            "data": response_data,
+            "reason": reason
         })
         
     except Exception as e:
@@ -369,6 +600,151 @@ def get_product_summary(search_query):
     except Exception as e:
         logger.error(f"Error in get_product_summary: {e}")
         return jsonify({"error": str(e)}), 500
+
+@app.route('/check-status/<search_query>', methods=['GET'])
+def check_summary_status(search_query):
+    """Check the status of a search query and whether it needs a summary generated"""
+    try:
+        # URL decode the search query
+        import urllib.parse
+        decoded_query = urllib.parse.unquote(search_query)
+        
+        logger.info(f"Checking status for query: {decoded_query}")
+        
+        # Check if we should generate a summary
+        should_generate, existing_summary, reason = should_generate_summary(decoded_query)
+        
+        # Get current video count
+        videos = get_video_summaries_by_query(decoded_query)
+        current_video_count = len(videos)
+        
+        status_info = {
+            "search_query": decoded_query,
+            "should_generate": should_generate,
+            "reason": reason,
+            "current_video_count": current_video_count,
+            "has_existing_summary": existing_summary is not None
+        }
+        
+        if existing_summary:
+            status_info["existing_summary"] = {
+                "product_name": existing_summary.get('product_name'),
+                "total_reviews": existing_summary.get('total_reviews'),
+                "total_views": existing_summary.get('total_views'),
+                "processed_at": existing_summary.get('processed_at')
+            }
+        
+        if should_generate:
+            status_info["message"] = f"Summary should be generated (reason: {reason})"
+        else:
+            status_info["message"] = f"No new videos available (reason: {reason})"
+        
+        return jsonify({
+            "status": "success",
+            "data": status_info
+        })
+        
+    except Exception as e:
+        logger.error(f"Error in check_summary_status: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/auto-process', methods=['POST'])
+def auto_process_endpoint():
+    """Automatically process all search queries that need summaries"""
+    try:
+        logger.info("Auto-process endpoint called")
+        
+        # Get all search queries with videos
+        query = f"""
+        SELECT DISTINCT search_query
+        FROM `{VIDEO_METADATA_TABLE}`
+        WHERE summary_available = true 
+        AND summary_content IS NOT NULL
+        ORDER BY search_query
+        """
+        
+        query_job = bigquery_client.query(query)
+        all_queries = [row.search_query for row in query_job.result()]
+        
+        if not all_queries:
+            return jsonify({
+                "status": "no_data",
+                "message": "No search queries with video summaries found"
+            })
+        
+        # Get existing summary queries
+        existing_query = f"""
+        SELECT DISTINCT search_query
+        FROM `{PRODUCT_SUMMARIES_TABLE}`
+        ORDER BY search_query
+        """
+        
+        existing_job = bigquery_client.query(existing_query)
+        existing_queries = [row.search_query for row in existing_job.result()]
+        
+        # Find queries that need processing
+        queries_to_process = []
+        for query in all_queries:
+            if query not in existing_queries:
+                queries_to_process.append((query, "new_query"))
+            else:
+                # Check if there are new videos
+                should_generate, _, reason = should_generate_summary(query)
+                if should_generate:
+                    queries_to_process.append((query, reason))
+        
+        logger.info(f"Found {len(queries_to_process)} queries that need processing")
+        
+        # Process each query
+        results = []
+        processed = 0
+        
+        for search_query, reason in queries_to_process:
+            try:
+                logger.info(f"Processing query: {search_query} (reason: {reason})")
+                
+                # Get video summaries for the query
+                videos = get_video_summaries_by_query(search_query)
+                
+                if not videos or len(videos) < 2:
+                    continue
+                
+                # Generate unified product summary
+                unified_summary = generate_unified_product_summary(search_query, videos)
+                
+                if not unified_summary:
+                    continue
+                
+                # Extract product name and save to BigQuery
+                product_name = extract_product_name(search_query)
+                bigquery_success = insert_product_summary_to_bigquery(product_name, search_query, unified_summary, videos)
+                
+                if bigquery_success:
+                    processed += 1
+                    results.append({
+                        "search_query": search_query,
+                        "status": "success",
+                        "reason": reason
+                    })
+                
+            except Exception as e:
+                logger.error(f"Error processing {search_query}: {e}")
+        
+        return jsonify({
+            "status": "completed",
+            "message": f"Auto-processing complete: {processed} processed",
+            "total_queries": len(all_queries),
+            "queries_to_process": len(queries_to_process),
+            "processed": processed,
+            "results": results
+        })
+        
+    except Exception as e:
+        logger.error(f"Error in auto_process_endpoint: {e}")
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8080))
