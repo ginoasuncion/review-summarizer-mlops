@@ -1,0 +1,6 @@
+{
+  "timestamp": "2025-06-25T12:00:00+00:00",
+  "product_name": "Test Product",
+  "found_in_bigquery": true,
+  "status": "success"
+}
