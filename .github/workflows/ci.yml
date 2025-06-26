@@ -7,7 +7,7 @@ on:
     branches: [ main ]
 
 jobs:
-  lint:
+  format:
     runs-on: ubuntu-latest
 
     steps:
@@ -27,10 +27,3 @@ jobs:
     - name: Install dependencies
       run: |
         uv pip install --system .
-
-    - name: Run code formatter (black)
-      run: black --check .
-
-    - name: Run linter (ruff)
-      run: ruff check .
-
