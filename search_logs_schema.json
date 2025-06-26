@@ -1,0 +1,6 @@
+[
+  {"name": "timestamp", "type": "TIMESTAMP", "mode": "REQUIRED"},
+  {"name": "product_name", "type": "STRING", "mode": "REQUIRED"},
+  {"name": "found_in_bigquery", "type": "BOOL", "mode": "REQUIRED"},
+  {"name": "status", "type": "STRING", "mode": "REQUIRED"}
+] 
