@@ -11,6 +11,7 @@ __pycache__/
 .env
 .venv
 .uv
+youtube_search_api/venv/
 
 # Package/environment management
 poetry.lock
@@ -55,3 +56,4 @@ build/
 *.egg-info/
 __pycache__/
 
+youtube-api/youtube-api-key.json
