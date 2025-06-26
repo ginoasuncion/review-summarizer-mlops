@@ -14,75 +14,69 @@ if not api_key:
     raise ValueError("OPENAI_API_KEY not found in environment variables. Check your .env file.")
 
 # Load and validate data
-csv_path = os.path.join(os.path.dirname(__file__), "test_product_dataset.csv")
+csv_path = os.path.join(os.path.dirname(__file__), "summarized_products.csv")
 if not os.path.exists(csv_path):
     raise FileNotFoundError(f"CSV file not found at {csv_path}")
 try:
-    df = pd.read_csv(csv_path).sample(n=50, random_state=42)
-    if df.empty or "full_text" not in df.columns or "product" not in df.columns:
-        raise ValueError("CSV must contain 'full_text' and 'product' columns with data.")
+    df = pd.read_csv(csv_path).sample(n=30, random_state=42)  # Sample 30 rows
+    if df.empty or "product" not in df.columns or "summaries" not in df.columns:
+        raise ValueError("CSV must contain 'product' and 'summaries' columns with data.")
 except Exception as e:
     raise ValueError(f"Error loading CSV: {str(e)}")
 
-# Prompt templates
+# New prompt templates for summarizing concatenated summaries
 PROMPTS = [
     (
-        "friendly_summary",
+        "concise_overview",
         """
-    You are a helpful, enthusiastic product reviewer assistant.
+    You are a professional product review aggregator.
 
-    Summarize the following transcript of a review for the shoe model: **{product}**.
-    Your goal is to create a clear, engaging, and friendly summary that feels like a recommendation from a trusted friend.
-
-    Emphasize:
-    - What the reviewer liked or disliked
-    - Comfort (daily wear, cushioning, sizing)
-    - Fit (true to size? narrow? wide?)
-    - Durability (build quality, longevity, visible wear)
-    - Performance (how it feels while walking/running, use cases)
-    - Style (appearance, versatility, colorways)
-
-    Avoid repeating the transcript. Keep it grounded in what was actually said.
-
-    Transcript:
-    {text}
-    """,
-    ),
-    (
-        "bullet_points",
-        """
-    You are a shoe review summarizer. Read the transcript for the shoe model: **{product}** and extract key insights.
-
-    Write **3–5 informative bullet points** that summarize the review, focusing on **objective observations and reviewer opinions**.
-
-    Each bullet should:
-    - Start with a strong, clear statement
-    - Emphasize **comfort**, **fit**, **durability**, **performance**, or **style**
-    - Mention standout phrases or concerns (e.g., "glue stains", "true to size", "perfect for casual wear")
-
-    Be concise but complete.
-
-    Transcript:
-    {text}
-    """,
-    ),
-    (
-        "technical_summary",
-        """
-    You are a professional product analyst.
-
-    Write a concise, technical summary of the review transcript for the shoe model: **{product}** aimed at product designers or sneaker reviewers.
+    Provide a concise and engaging overview of the concatenated summaries for the shoe model: **{product}**.
+    Your summary should distill the key points from multiple reviews into a single, friendly recommendation.
 
     Focus on:
-    - **Materials** used (e.g., suede, mesh, leather)
-    - **Construction quality** (e.g., stitching, glue stains, sole type)
-    - **Fit and ergonomics** (e.g., arch support, flexibility, toe box shape)
-    - **Performance** feedback (e.g., suitable for running, walking, gym, lifestyle)
-    - **Design details** (e.g., aesthetics, branding, iconic elements)
+    - Overall sentiment (positive, mixed, negative)
+    - Common themes in comfort, fit, durability, performance, and style
+    - Any notable pros or cons mentioned across reviews
 
-    Avoid personal tone. Keep the summary neutral, precise, and focused on design & technical value.
+    Keep it brief (1-2 sentences) and avoid repeating verbatim text.
 
-    Transcript:
+    Concatenated Summaries:
+    {text}
+    """,
+    ),
+    (
+        "detailed_analysis",
+        """
+    You are an expert shoe review analyst.
+
+    Create a detailed analysis of the concatenated summaries for the shoe model: **{product}**.
+    Break down the key findings into 3-5 bullet points, covering:
+    - Consensus on comfort, fit, durability, performance, and style
+    - Significant positive or negative feedback
+    - Any recurring issues or standout praises
+
+    Use objective language and avoid direct quotes from the summaries.
+
+    Concatenated Summaries:
+    {text}
+    """,
+    ),
+    (
+        "technical_evaluation",
+        """
+    You are a technical product evaluation specialist.
+
+    Provide a neutral, technical evaluation of the concatenated summaries for the shoe model: **{product}**.
+    Focus on:
+    - Material and construction feedback (e.g., quality, wear patterns)
+    - Fit and ergonomic observations (e.g., sizing consistency, support)
+    - Performance trends (e.g., suitability for specific activities)
+    - Design and durability insights
+
+    Keep the tone professional and concise, avoiding personal opinions.
+
+    Concatenated Summaries:
     {text}
     """,
     ),
@@ -127,7 +121,7 @@ metrics = [helpfulness, relevance, conciseness]
 # Summary function
 def summarize(review_text, product, prompt_template, model_name):
     try:
-        truncated_text = review_text[:48000]
+        truncated_text = review_text[:48000]  # Limit input length
         prompt = prompt_template.format(product=product, text=truncated_text)
         response = client.chat.completions.create(
             model=model_name,
@@ -141,7 +135,7 @@ def summarize(review_text, product, prompt_template, model_name):
         return ""
 
 # Run MLflow experiments
-mlflow.set_experiment("summarize-product-eval-single-video")
+mlflow.set_experiment("summarize-concatenated-eval")
 
 for model_name in ["gpt-3.5-turbo", "gpt-4o"]:
     for prompt_name, prompt_template in PROMPTS:
@@ -150,14 +144,14 @@ for model_name in ["gpt-3.5-turbo", "gpt-4o"]:
         summaries = []
 
         for _, row in df.iterrows():
-            text = row["full_text"]
+            text = row["summaries"]  # Use concatenated summaries
             product = row["product"]
             summary = summarize(text, product, prompt_template, model_name)
             summaries.append(summary)
 
         eval_df = pd.DataFrame(
             {
-                "review": df["full_text"].astype(str).str.slice(0, 12000),
+                "review": df["summaries"].astype(str).str.slice(0, 12000),  # Use concatenated summaries as review
                 "summary": pd.Series(summaries).astype(str).str.slice(0, 3000),
             }
         )
