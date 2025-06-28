@@ -1,12 +1,17 @@
+# Updated with new BigQuery fields: product_name, total_reviews, total_views, average_views
 import json
 import os
 import logging
 import openai
+import time
+import random
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
 from flask import Flask, request, jsonify
-from google.cloud import bigquery
+from google.cloud import bigquery, storage
 from google.cloud.exceptions import NotFound
+import requests
+import functions_framework
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -14,6 +19,7 @@ logger = logging.getLogger(__name__)
 
 # Initialize clients
 bigquery_client = bigquery.Client()
+storage_client = storage.Client()
 
 # Configuration
 PROJECT_ID = os.environ.get('GCP_PROJECT_ID', 'buoyant-yew-463209-k5')
@@ -24,10 +30,14 @@ PRODUCT_SUMMARIES_TABLE = f"{BIGQUERY_PROJECT}.{BIGQUERY_DATASET}.product_summar
 
 # OpenAI Configuration
 OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY')
-OPENAI_MODEL = os.environ.get('OPENAI_MODEL', 'gpt-3.5-turbo')
+OPENAI_MODEL = os.environ.get('OPENAI_MODEL', 'gpt-4o')
 
 # Flask app
 app = Flask(__name__)
+
+# New configuration
+BUCKET_NAME = "youtube-processed-data-bucket"
+LLM_JUDGE_API_URL = "https://llm-judge-api-nxbmt7mfiq-uc.a.run.app/evaluate"
 
 def get_video_summaries_by_query(search_query: str) -> List[Dict[str, Any]]:
     """Get all video summaries for a specific search query from BigQuery"""
@@ -36,10 +46,10 @@ def get_video_summaries_by_query(search_query: str) -> List[Dict[str, Any]]:
         SELECT 
             video_id,
             title,
-            channel_name,
+            channel_title,
             view_count,
             summary_content,
-            summary_processed_at
+            processed_at
         FROM `{VIDEO_METADATA_TABLE}`
         WHERE search_query = @search_query 
         AND summary_available = true 
@@ -61,10 +71,10 @@ def get_video_summaries_by_query(search_query: str) -> List[Dict[str, Any]]:
             videos.append({
                 'video_id': row.video_id,
                 'title': row.title,
-                'channel_name': row.channel_name,
+                'channel_title': row.channel_title,
                 'view_count': row.view_count,
                 'summary_content': row.summary_content,
-                'summary_processed_at': row.summary_processed_at.isoformat() if row.summary_processed_at else None
+                'processed_at': row.processed_at.isoformat() if row.processed_at else None
             })
         
         logger.info(f"Found {len(videos)} videos with summaries for query: {search_query}")
@@ -85,11 +95,11 @@ def check_existing_product_summary(search_query: str) -> Optional[Dict[str, Any]
             total_reviews,
             total_views,
             average_views,
-            processed_at,
-            summary_file
+            created_at,
+            video_count
         FROM `{PRODUCT_SUMMARIES_TABLE}`
         WHERE search_query = @search_query
-        ORDER BY processed_at DESC
+        ORDER BY created_at DESC
         LIMIT 1
         """
         
@@ -111,8 +121,8 @@ def check_existing_product_summary(search_query: str) -> Optional[Dict[str, Any]
                 'total_reviews': row.total_reviews,
                 'total_views': row.total_views,
                 'average_views': row.average_views,
-                'processed_at': row.processed_at.isoformat() if row.processed_at else None,
-                'summary_file': row.summary_file
+                'created_at': row.created_at.isoformat() if row.created_at else None,
+                'video_count': row.video_count
             }
         
         return None
@@ -121,30 +131,31 @@ def check_existing_product_summary(search_query: str) -> Optional[Dict[str, Any]
         logger.error(f"Error checking existing product summary for query {search_query}: {e}")
         return None
 
-def generate_unified_product_summary(search_query: str, videos: List[Dict[str, Any]]) -> Optional[str]:
-    """Generate a unified product summary from multiple video summaries using ChatGPT"""
-    try:
-        if not OPENAI_API_KEY:
-            logger.error("OpenAI API key not configured")
-            return None
-        
-        # Set up OpenAI client
-        openai.api_key = OPENAI_API_KEY
-        
-        # Prepare the concatenated summaries
-        concatenated_summaries = []
-        total_views = 0
-        
-        for i, video in enumerate(videos, 1):
-            video_id = video['video_id']
-            title = video['title']
-            channel = video['channel_name']
-            views = video['view_count']
-            summary = video['summary_content']
+def generate_unified_product_summary(search_query: str, videos: List[Dict[str, Any]], max_retries: int = 3) -> Optional[Dict[str, Any]]:
+    """Generate a unified product summary from multiple video summaries using ChatGPT with retry logic"""
+    for attempt in range(max_retries + 1):
+        try:
+            if not OPENAI_API_KEY:
+                logger.error("OpenAI API key not configured")
+                return None
             
-            total_views += views
+            # Set up OpenAI client (new style)
+            client = openai.OpenAI(api_key=OPENAI_API_KEY)
             
-            video_header = f"""
+            # Prepare the concatenated summaries
+            concatenated_summaries = []
+            total_views = 0
+            
+            for i, video in enumerate(videos, 1):
+                video_id = video['video_id']
+                title = video['title']
+                channel = video['channel_title']
+                views = video['view_count']
+                summary = video['summary_content']
+                
+                total_views += views
+                
+                video_header = f"""
 {'='*80}
 VIDEO {i}: {title}
 Channel: {channel}
@@ -153,14 +164,14 @@ Video ID: {video_id}
 {'='*80}
 
 """
-            concatenated_summaries.append(video_header)
-            concatenated_summaries.append(summary)
-            concatenated_summaries.append("\n\n")
-        
-        full_content = "".join(concatenated_summaries)
-        
-        # Create prompt for unified summarization
-        prompt = f"""
+                concatenated_summaries.append(video_header)
+                concatenated_summaries.append(summary)
+                concatenated_summaries.append("\n\n")
+            
+            full_content = "".join(concatenated_summaries)
+            
+            # Create prompt for unified summarization
+            prompt = f"""
 Please create a comprehensive, unified product summary based on the following YouTube video reviews.
 
 Search Query: {search_query}
@@ -186,23 +197,46 @@ Keep the summary comprehensive but concise (around 400-500 words).
 Focus on providing actionable insights for potential buyers.
 """
 
-        response = openai.ChatCompletion.create(
-            model=OPENAI_MODEL,
-            messages=[
-                {"role": "system", "content": "You are a helpful assistant that creates unified product summaries from multiple YouTube video reviews, focusing on providing clear, actionable insights for potential buyers."},
-                {"role": "user", "content": prompt}
-            ],
-            max_tokens=800,
-            temperature=0.3
-        )
-        
-        summary = response.choices[0].message.content.strip()
-        logger.info(f"Generated unified product summary for query: {search_query} ({len(summary)} characters)")
-        return summary
-        
-    except Exception as e:
-        logger.error(f"Error generating unified product summary: {e}")
-        return None
+            response = client.chat.completions.create(
+                model=OPENAI_MODEL,
+                messages=[
+                    {"role": "system", "content": "You are a helpful assistant that creates unified product summaries from multiple YouTube video reviews, focusing on providing clear, actionable insights for potential buyers."},
+                    {"role": "user", "content": prompt}
+                ],
+                max_tokens=800,
+                temperature=0.3
+            )
+            
+            summary = response.choices[0].message.content.strip()
+            logger.info(f"Generated unified product summary for query: {search_query} ({len(summary)} characters)")
+            
+            # Always evaluate product summaries with LLM judge since they're the final output
+            llm_scores = call_llm_judge_api(
+                summary_content=summary,
+                search_query=search_query
+            )
+            
+            return {
+                'summary': summary,
+                'llm_scores': llm_scores
+            }
+            
+        except openai.RateLimitError as e:
+            if attempt < max_retries:
+                # Calculate backoff time (exponential backoff with jitter)
+                backoff_time = min(2 ** attempt + (time.time() % 1), 60)  # Cap at 60 seconds
+                logger.warning(f"Rate limit hit during product summary generation, retrying in {backoff_time:.1f} seconds (attempt {attempt + 1}/{max_retries + 1})")
+                time.sleep(backoff_time)
+                continue
+            else:
+                logger.error(f"Rate limit exceeded after {max_retries + 1} attempts during product summary generation: {e}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Error generating unified product summary: {e}")
+            return None
+    
+    return None
 
 def extract_product_name(search_query: str) -> str:
     """Extract product name from search query"""
@@ -218,25 +252,32 @@ def extract_product_name(search_query: str) -> str:
         logger.error(f"Error extracting product name: {e}")
         return search_query.title()
 
-def insert_product_summary_to_bigquery(product_name: str, search_query: str, summary_content: str, videos: List[Dict[str, Any]]):
+def insert_product_summary_to_bigquery(product_name: str, search_query: str, summary_content: str, videos: List[Dict[str, Any]], llm_scores: Optional[Dict[str, float]] = None):
     """Insert the unified product summary into BigQuery"""
     try:
-        total_reviews = len(videos)
-        total_views = sum(video['view_count'] for video in videos)
-        average_views = total_views / total_reviews if total_reviews > 0 else 0
+        video_ids = [video['video_id'] for video in videos]
         
         # Prepare the row data
+        total_reviews = len(videos)
+        total_views = sum(video.get('view_count', 0) for video in videos)
+        average_views = total_views / total_reviews if total_reviews > 0 else 0
         row = {
-            'product_name': product_name,
+            'product_name': extract_product_name(search_query),
             'search_query': search_query,
             'summary_content': summary_content,
+            'video_count': total_reviews,
+            'video_ids': video_ids,
+            'created_at': datetime.now(timezone.utc).isoformat(),
             'total_reviews': total_reviews,
             'total_views': total_views,
-            'average_views': average_views,
-            'processed_at': datetime.now(timezone.utc).isoformat(),
-            'summary_file': f"gs://product-summaries/{search_query.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
-            'processing_strategy': 'unified_summary'
+            'average_views': average_views
         }
+        
+        # Add LLM judge scores if available
+        if llm_scores:
+            row['llm_relevance_score'] = llm_scores.get('relevance')
+            row['llm_helpfulness_score'] = llm_scores.get('helpfulness')
+            row['llm_conciseness_score'] = llm_scores.get('conciseness')
         
         # Insert the row into BigQuery
         table_id = PRODUCT_SUMMARIES_TABLE
@@ -248,7 +289,7 @@ def insert_product_summary_to_bigquery(product_name: str, search_query: str, sum
             logger.error(f"BigQuery insert errors: {errors}")
             return False
         
-        logger.info(f"Successfully inserted product summary to BigQuery: {product_name}")
+        logger.info(f"Successfully inserted product summary to BigQuery: {search_query}")
         return True
         
     except Exception as e:
@@ -421,7 +462,7 @@ def auto_process_summaries() -> Dict[str, Any]:
                 product_name = extract_product_name(search_query)
                 
                 # Insert into BigQuery
-                bigquery_success = insert_product_summary_to_bigquery(product_name, search_query, unified_summary, videos)
+                bigquery_success = insert_product_summary_to_bigquery(product_name, search_query, unified_summary['summary'], videos, unified_summary['llm_scores'])
                 
                 if not bigquery_success:
                     logger.error(f"Failed to save summary to BigQuery for {search_query}")
@@ -541,7 +582,7 @@ def generate_product_summary():
         product_name = extract_product_name(search_query)
         
         # Insert into BigQuery (this will overwrite existing summary if reason is "new_videos")
-        bigquery_success = insert_product_summary_to_bigquery(product_name, search_query, unified_summary, videos)
+        bigquery_success = insert_product_summary_to_bigquery(product_name, search_query, unified_summary['summary'], videos, unified_summary['llm_scores'])
         
         if not bigquery_success:
             return jsonify({
@@ -555,7 +596,7 @@ def generate_product_summary():
         response_data = {
             "product_name": product_name,
             "search_query": search_query,
-            "summary_content": unified_summary,
+            "summary_content": unified_summary['summary'],
             "total_reviews": len(videos),
             "total_views": total_views,
             "average_views": average_views,
@@ -631,7 +672,7 @@ def check_summary_status(search_query):
                 "product_name": existing_summary.get('product_name'),
                 "total_reviews": existing_summary.get('total_reviews'),
                 "total_views": existing_summary.get('total_views'),
-                "processed_at": existing_summary.get('processed_at')
+                "created_at": existing_summary.get('created_at')
             }
         
         if should_generate:
@@ -717,7 +758,7 @@ def auto_process_endpoint():
                 
                 # Extract product name and save to BigQuery
                 product_name = extract_product_name(search_query)
-                bigquery_success = insert_product_summary_to_bigquery(product_name, search_query, unified_summary, videos)
+                bigquery_success = insert_product_summary_to_bigquery(product_name, search_query, unified_summary['summary'], videos, unified_summary['llm_scores'])
                 
                 if bigquery_success:
                     processed += 1
@@ -745,6 +786,34 @@ def auto_process_endpoint():
             "status": "error",
             "message": str(e)
         }), 500
+
+def call_llm_judge_api(summary_content: str, search_query: str, video_title: str = None) -> Optional[Dict[str, float]]:
+    """
+    Call the LLM Judge API to evaluate a summary.
+    """
+    try:
+        payload = {
+            "summary_content": summary_content,
+            "search_query": search_query,
+            "video_title": video_title,
+            "openai_model": "gpt-4o",
+            "max_retries": 3
+        }
+        
+        response = requests.post(LLM_JUDGE_API_URL, json=payload, timeout=30)
+        response.raise_for_status()
+        
+        result = response.json()
+        if result.get("success") and result.get("scores"):
+            logger.info(f"LLM Judge API scores: {result['scores']}")
+            return result["scores"]
+        else:
+            logger.error(f"LLM Judge API failed: {result.get('error', 'Unknown error')}")
+            return None
+            
+    except Exception as e:
+        logger.error(f"Error calling LLM Judge API: {e}")
+        return None
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8080))

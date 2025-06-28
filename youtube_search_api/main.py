@@ -23,7 +23,7 @@ PROJECT_ID = os.getenv("GCP_PROJECT_ID")
 
 class SearchRequest(BaseModel):
     query: str
-    max_results: int = 5
+    max_results: int = 3
 
 class SearchResponse(BaseModel):
     status: str
@@ -48,11 +48,7 @@ def search_youtube_with_oxylabs(query: str):
     url = 'https://realtime.oxylabs.io/v1/queries'
     payload = {
         'source': 'youtube_search',
-        'query': query,
-        'context': [
-            {'key': 'language_code', 'value': 'en'},
-            {'key': 'search_type', 'value': 'video'}
-        ]
+        'query': query
     }
 
     headers = {

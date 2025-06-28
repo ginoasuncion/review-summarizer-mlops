@@ -11,7 +11,10 @@ __pycache__/
 .env
 .venv
 .uv
+venv/
+*/venv/
 youtube_search_api/venv/
+youtube_transcript_summarizer/venv/
 
 # Package/environment management
 poetry.lock
@@ -57,3 +60,12 @@ build/
 __pycache__/
 
 youtube-api/youtube-api-key.json
+
+# Frontend dependencies and build artifacts
+node_modules/
+frontend/node_modules/
+frontend/build/
+frontend/dist/
+frontend/.cache/
+frontend/.next/
+frontend/out/

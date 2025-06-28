@@ -3,6 +3,7 @@ FROM --platform=linux/amd64 python:3.9-slim
 WORKDIR /app
 
 # Copy requirements and install dependencies
+# Updated to use openai==1.91.0 to fix proxies issue
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 

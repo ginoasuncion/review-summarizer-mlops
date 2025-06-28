@@ -44,11 +44,11 @@ def search_bigquery_for_product(product_name: str) -> Optional[Dict[str, Any]]:
         # Query BigQuery for the product
         query = f"""
         SELECT product_name, search_query, summary_content, total_reviews, 
-               total_views, average_views, processed_at
+               total_views, average_views, created_at
         FROM `{PRODUCT_SUMMARIES_TABLE}`
         WHERE LOWER(product_name) LIKE '%{normalized_product}%'
            OR LOWER(search_query) LIKE '%{normalized_product}%'
-        ORDER BY processed_at DESC
+        ORDER BY created_at DESC
         LIMIT 1
         """
         
@@ -64,7 +64,7 @@ def search_bigquery_for_product(product_name: str) -> Optional[Dict[str, Any]]:
                 'total_reviews': row.total_reviews,
                 'total_views': row.total_views,
                 'average_views': row.average_views,
-                'processed_at': row.processed_at.isoformat() if row.processed_at else None,
+                'created_at': row.created_at.isoformat() if row.created_at else None,
                 'found_in_bigquery': True
             }
         
@@ -94,7 +94,7 @@ def log_query_to_gcs(product_name: str, found: bool, summary_data: Optional[Dict
             log_entry['summary_data'] = {
                 'product_name': summary_data.get('product_name'),
                 'total_reviews': summary_data.get('total_reviews'),
-                'processed_at': summary_data.get('processed_at')
+                'created_at': summary_data.get('created_at')
             }
         
         # Create filename with timestamp
@@ -200,11 +200,11 @@ def search_products():
         # Search BigQuery for products
         search_query = f"""
         SELECT product_name, search_query, summary_content, total_reviews, 
-               total_views, average_views, processed_at
+               total_views, average_views, created_at
         FROM `{PRODUCT_SUMMARIES_TABLE}`
         WHERE LOWER(product_name) LIKE '%{query.lower()}%'
            OR LOWER(search_query) LIKE '%{query.lower()}%'
-        ORDER BY processed_at DESC
+        ORDER BY created_at DESC
         LIMIT 10
         """
         
@@ -220,7 +220,7 @@ def search_products():
                 'total_reviews': row.total_reviews,
                 'total_views': row.total_views,
                 'average_views': row.average_views,
-                'processed_at': row.processed_at.isoformat() if row.processed_at else None
+                'created_at': row.created_at.isoformat() if row.created_at else None
             })
         
         return jsonify({
@@ -247,9 +247,9 @@ def get_stats():
         
         # Get recent products
         recent_query = f"""
-        SELECT product_name, processed_at, total_reviews
+        SELECT product_name, created_at, total_reviews
         FROM `{PRODUCT_SUMMARIES_TABLE}`
-        ORDER BY processed_at DESC
+        ORDER BY created_at DESC
         LIMIT 5
         """
         recent_job = bigquery_client.query(recent_query)
@@ -257,7 +257,7 @@ def get_stats():
         for row in recent_job.result():
             recent_products.append({
                 'product_name': row.product_name,
-                'processed_at': row.processed_at.isoformat() if row.processed_at else None,
+                'created_at': row.created_at.isoformat() if row.created_at else None,
                 'total_reviews': row.total_reviews
             })
         

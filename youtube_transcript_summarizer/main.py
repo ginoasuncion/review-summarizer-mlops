@@ -2,6 +2,8 @@ import json
 import os
 import logging
 import openai
+import time
+import random
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any
 from flask import Flask, request, jsonify
@@ -9,6 +11,8 @@ from google.cloud import storage
 from google.cloud import bigquery
 from google.cloud.exceptions import NotFound
 import base64
+import requests
+import functions_framework
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -30,7 +34,11 @@ VIDEO_METADATA_TABLE = f"{BIGQUERY_PROJECT}.{BIGQUERY_DATASET}.video_metadata"
 
 # OpenAI Configuration
 OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY')
-OPENAI_MODEL = os.environ.get('OPENAI_MODEL', 'gpt-3.5-turbo')
+OPENAI_MODEL = os.environ.get('OPENAI_MODEL', 'gpt-4o')
+
+# LLM Judge Configuration
+LLM_JUDGE_PROBABILITY = float(os.environ.get('LLM_JUDGE_PROBABILITY', '0.2'))  # 20% chance by default
+LLM_JUDGE_API_URL = "https://llm-judge-api-nxbmt7mfiq-uc.a.run.app/evaluate"
 
 # Flask app
 app = Flask(__name__)
@@ -72,60 +80,91 @@ def get_video_metadata(video_id: str) -> Optional[Dict[str, Any]]:
         logger.error(f"Error retrieving metadata for video {video_id}: {e}")
         return None
 
-def generate_summary_with_chatgpt(transcript: str, video_metadata: Dict[str, Any]) -> Optional[str]:
-    """Generate summary using ChatGPT"""
-    try:
-        if not OPENAI_API_KEY:
-            logger.error("OpenAI API key not configured")
-            return None
-        
-        # Set up OpenAI client
-        openai.api_key = OPENAI_API_KEY
-        
-        # Create prompt for summarization
-        title = video_metadata.get('title', 'Unknown Title')
-        channel = video_metadata.get('channel_name', 'Unknown Channel')
-        search_query = video_metadata.get('search_query', 'Unknown Query')
-        
-        prompt = f"""
-Please provide a comprehensive summary of this YouTube video transcript. 
+def generate_summary_with_llm_judge(transcript: str, video_metadata: Dict[str, Any], max_retries: int = 3) -> Optional[Dict[str, Any]]:
+    """Generate summary using OpenAI and optionally evaluate with LLM Judge API"""
+    for attempt in range(max_retries + 1):
+        try:
+            if not OPENAI_API_KEY:
+                logger.error("OpenAI API key not configured")
+                return None
+            
+            # Set up OpenAI client
+            client = openai.OpenAI(api_key=OPENAI_API_KEY)
+            
+            # Extract product name from search query or title
+            search_query = video_metadata.get('search_query', 'Unknown Query')
+            title = video_metadata.get('title', 'Unknown Title')
+            
+            # Try to extract product name from search query or title
+            product = search_query
+            if 'review' in search_query.lower():
+                product = search_query.replace('review', '').strip()
+            elif 'review' in title.lower():
+                product = title.replace('review', '').strip()
+            
+            # Create the new focused prompt for shoe reviews
+            prompt = f"""You are a helpful, enthusiastic product reviewer assistant.
 
-Video Details:
-- Title: {title}
-- Channel: {channel}
-- Search Query: {search_query}
+Summarize the following transcript of a review for the shoe model: {product}.
+Your goal is to create a clear, engaging, and friendly summary that feels like a recommendation from a trusted friend.
+
+Emphasize:
+- What the reviewer liked or disliked
+- Comfort (daily wear, cushioning, sizing)
+- Fit (true to size? narrow? wide?)
+- Durability (build quality, longevity, visible wear)
+- Performance (how it feels while walking/running, use cases)
+- Style (appearance, versatility, colorways)
+
+Avoid repeating the transcript. Keep it grounded in what was actually said.
 
 Transcript:
-{transcript}
+{transcript}"""
 
-Please provide a structured summary that includes:
-1. **Main Topic**: What is the video about?
-2. **Key Points**: What are the main points discussed?
-3. **Product Review Details** (if applicable): What products are reviewed and what are the findings?
-4. **Recommendations**: What recommendations or conclusions are made?
-5. **Overall Rating/Opinion**: What is the overall sentiment or rating?
-
-Format the summary in a clear, structured manner with bullet points where appropriate.
-Keep the summary concise but comprehensive (around 200-300 words).
-"""
-
-        response = openai.ChatCompletion.create(
-            model=OPENAI_MODEL,
-            messages=[
-                {"role": "system", "content": "You are a helpful assistant that summarizes YouTube video transcripts, especially product reviews and comparisons."},
-                {"role": "user", "content": prompt}
-            ],
-            max_tokens=500,
-            temperature=0.3
-        )
-        
-        summary = response.choices[0].message.content.strip()
-        logger.info(f"Generated summary for video {video_metadata.get('video_id', 'unknown')} ({len(summary)} characters)")
-        return summary
-        
-    except Exception as e:
-        logger.error(f"Error generating summary with ChatGPT: {e}")
-        return None
+            response = client.chat.completions.create(
+                model=OPENAI_MODEL,
+                messages=[
+                    {"role": "system", "content": "You are a helpful, enthusiastic product reviewer assistant that creates engaging, friendly summaries of shoe reviews."},
+                    {"role": "user", "content": prompt}
+                ],
+                max_tokens=500,
+                temperature=0.3
+            )
+            
+            summary = response.choices[0].message.content.strip()
+            logger.info(f"Generated summary for video {video_metadata.get('video_id', 'unknown')} ({len(summary)} characters)")
+            
+            # Only evaluate with LLM judge for randomly selected videos
+            llm_scores = None
+            video_id = video_metadata.get('video_id', 'unknown')
+            
+            if should_evaluate_with_llm_judge(search_query, video_id):
+                # Evaluate the summary with LLM judge
+                llm_scores = call_llm_judge_api(summary, search_query, title)
+            else:
+                logger.info(f"Skipping LLM judge evaluation for video {video_id}")
+            
+            return {
+                'summary': summary,
+                'llm_scores': llm_scores
+            }
+            
+        except openai.RateLimitError as e:
+            if attempt < max_retries:
+                # Calculate backoff time (exponential backoff with jitter)
+                backoff_time = min(2 ** attempt + (time.time() % 1), 60)  # Cap at 60 seconds
+                logger.warning(f"Rate limit hit during summary generation, retrying in {backoff_time:.1f} seconds (attempt {attempt + 1}/{max_retries + 1})")
+                time.sleep(backoff_time)
+                continue
+            else:
+                logger.error(f"Rate limit exceeded after {max_retries + 1} attempts during summary generation: {e}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Error generating summary with OpenAI: {e}")
+            return None
+    
+    return None
 
 def save_summary_to_gcs(summary: str, video_id: str) -> Optional[str]:
     """Save summary to GCS"""
@@ -177,44 +216,154 @@ def update_video_metadata_with_summary(video_id: str, summary_file: str):
         logger.error(f"Error updating video metadata: {e}")
         return False
 
-def update_video_metadata_in_bigquery(video_metadata: Dict[str, Any], summary_file: str, summary_content: str):
+def update_video_metadata_in_bigquery(video_metadata: Dict[str, Any], summary_file: str, summary_content: str, llm_scores: Optional[Dict[str, float]] = None):
     """Update video metadata in BigQuery with summary information"""
     try:
+        video_id = video_metadata.get('video_id', '')
+        
         # Prepare the row data for BigQuery
         row = {
-            'video_id': video_metadata.get('video_id', ''),
+            'video_id': video_id,
             'title': video_metadata.get('title', ''),
-            'channel_name': video_metadata.get('channel_name', ''),
-            'view_count': video_metadata.get('views', 0),
+            'channel_title': video_metadata.get('channel_title', ''),
+            'description': video_metadata.get('description', ''),
+            'published_at': video_metadata.get('published_at'),
+            'view_count': video_metadata.get('view_count', 0),
+            'like_count': video_metadata.get('like_count', 0),
+            'comment_count': video_metadata.get('comment_count', 0),
             'duration': video_metadata.get('duration', ''),
-            'url': video_metadata.get('url', ''),
+            'tags': video_metadata.get('tags', []),
+            'category_id': video_metadata.get('category_id', ''),
+            'default_language': video_metadata.get('default_language', ''),
+            'default_audio_language': video_metadata.get('default_audio_language', ''),
             'search_query': video_metadata.get('search_query', ''),
-            'processed_at': video_metadata.get('processed_at', datetime.now(timezone.utc).isoformat()),
-            'transcript_available': True,  # Since we have a transcript if we're generating a summary
             'summary_available': True,
-            'transcript_file': f"gs://{SOURCE_BUCKET}/transcripts/{video_metadata.get('video_id', '')}.txt",
-            'summary_file': summary_file,
             'summary_content': summary_content,
-            'summary_processed_at': datetime.now(timezone.utc).isoformat()
+            'processed_at': datetime.now(timezone.utc).isoformat()
         }
         
-        # Insert the row into BigQuery
-        table_id = VIDEO_METADATA_TABLE
-        table = bigquery_client.get_table(table_id)
+        # Add LLM judge scores if available
+        if llm_scores:
+            row['llm_relevance_score'] = llm_scores.get('relevance')
+            row['llm_helpfulness_score'] = llm_scores.get('helpfulness')
+            row['llm_conciseness_score'] = llm_scores.get('conciseness')
         
-        # Insert the row (BigQuery will handle duplicates based on the table's primary key)
-        errors = bigquery_client.insert_rows_json(table, [row])
+        # Use parameterized query to safely handle text content
+        merge_query = f"""
+        MERGE `{VIDEO_METADATA_TABLE}` AS target
+        USING (SELECT @video_id as video_id) AS source
+        ON target.video_id = source.video_id
+        WHEN MATCHED THEN
+            UPDATE SET
+                title = @title,
+                channel_title = @channel_title,
+                description = @description,
+                published_at = @published_at,
+                view_count = @view_count,
+                like_count = @like_count,
+                comment_count = @comment_count,
+                duration = @duration,
+                category_id = @category_id,
+                default_language = @default_language,
+                default_audio_language = @default_audio_language,
+                search_query = @search_query,
+                summary_available = @summary_available,
+                summary_content = @summary_content,
+                processed_at = @processed_at,
+                llm_relevance_score = @llm_relevance_score,
+                llm_helpfulness_score = @llm_helpfulness_score,
+                llm_conciseness_score = @llm_conciseness_score
+        WHEN NOT MATCHED THEN
+            INSERT (video_id, title, channel_title, description, published_at, view_count, like_count, comment_count, duration, category_id, default_language, default_audio_language, search_query, summary_available, summary_content, processed_at, llm_relevance_score, llm_helpfulness_score, llm_conciseness_score)
+            VALUES (@video_id, @title, @channel_title, @description, @published_at, @view_count, @like_count, @comment_count, @duration, @category_id, @default_language, @default_audio_language, @search_query, @summary_available, @summary_content, @processed_at, @llm_relevance_score, @llm_helpfulness_score, @llm_conciseness_score)
+        """
         
-        if errors:
-            logger.error(f"BigQuery insert errors: {errors}")
-            return False
+        # Create query parameters
+        query_parameters = [
+            bigquery.ScalarQueryParameter("video_id", "STRING", row['video_id']),
+            bigquery.ScalarQueryParameter("title", "STRING", row['title']),
+            bigquery.ScalarQueryParameter("channel_title", "STRING", row['channel_title']),
+            bigquery.ScalarQueryParameter("description", "STRING", row['description']),
+            bigquery.ScalarQueryParameter("published_at", "TIMESTAMP", row['published_at'] if row['published_at'] not in [None, '', 'None'] else None),
+            bigquery.ScalarQueryParameter("view_count", "INTEGER", row['view_count']),
+            bigquery.ScalarQueryParameter("like_count", "INTEGER", row['like_count']),
+            bigquery.ScalarQueryParameter("comment_count", "INTEGER", row['comment_count']),
+            bigquery.ScalarQueryParameter("duration", "STRING", row['duration']),
+            bigquery.ScalarQueryParameter("category_id", "STRING", row['category_id']),
+            bigquery.ScalarQueryParameter("default_language", "STRING", row['default_language']),
+            bigquery.ScalarQueryParameter("default_audio_language", "STRING", row['default_audio_language']),
+            bigquery.ScalarQueryParameter("search_query", "STRING", row['search_query']),
+            bigquery.ScalarQueryParameter("summary_available", "BOOL", row['summary_available']),
+            bigquery.ScalarQueryParameter("summary_content", "STRING", row['summary_content']),
+            bigquery.ScalarQueryParameter("processed_at", "TIMESTAMP", row['processed_at']),
+            bigquery.ScalarQueryParameter("llm_relevance_score", "FLOAT", row.get('llm_relevance_score')),
+            bigquery.ScalarQueryParameter("llm_helpfulness_score", "FLOAT", row.get('llm_helpfulness_score')),
+            bigquery.ScalarQueryParameter("llm_conciseness_score", "FLOAT", row.get('llm_conciseness_score'))
+        ]
         
-        logger.info(f"Successfully updated video metadata in BigQuery: {video_metadata.get('video_id', '')}")
+        # Execute the parameterized query
+        job_config = bigquery.QueryJobConfig(query_parameters=query_parameters)
+        query_job = bigquery_client.query(merge_query, job_config=job_config)
+        query_job.result()  # Wait for the query to complete
+        
+        logger.info(f"Successfully updated video metadata in BigQuery: {video_id}")
         return True
         
     except Exception as e:
         logger.error(f"Error updating video metadata in BigQuery: {e}")
         return False
+
+def should_evaluate_with_llm_judge(search_query: str, video_id: str) -> bool:
+    """
+    Determine if this video should be evaluated by the LLM judge.
+    Uses a deterministic random selection based on search query to ensure
+    only one video per search query gets evaluated.
+    """
+    # Use search query as seed for deterministic randomness
+    random.seed(hash(search_query) % (2**32))
+    
+    # Generate a random number between 0 and 1
+    random_value = random.random()
+    
+    # Reset seed to avoid affecting other random operations
+    random.seed()
+    
+    should_evaluate = random_value < LLM_JUDGE_PROBABILITY
+    
+    if should_evaluate:
+        logger.info(f"Selected video {video_id} for LLM judge evaluation (query: {search_query})")
+    else:
+        logger.info(f"Skipping LLM judge evaluation for video {video_id} (query: {search_query})")
+    
+    return should_evaluate
+
+def call_llm_judge_api(summary_content: str, search_query: str, video_title: str = None) -> Optional[Dict[str, float]]:
+    """
+    Call the LLM Judge API to evaluate a summary.
+    """
+    try:
+        payload = {
+            "summary_content": summary_content,
+            "search_query": search_query,
+            "video_title": video_title,
+            "openai_model": "gpt-4o",
+            "max_retries": 3
+        }
+        
+        response = requests.post(LLM_JUDGE_API_URL, json=payload, timeout=30)
+        response.raise_for_status()
+        
+        result = response.json()
+        if result.get("success") and result.get("scores"):
+            logger.info(f"LLM Judge API scores: {result['scores']}")
+            return result["scores"]
+        else:
+            logger.error(f"LLM Judge API failed: {result.get('error', 'Unknown error')}")
+            return None
+            
+    except Exception as e:
+        logger.error(f"Error calling LLM Judge API: {e}")
+        return None
 
 def transcript_summarizer(cloud_event):
     """Process transcript files and generate summaries"""
@@ -281,9 +430,9 @@ def transcript_summarizer(cloud_event):
                 'video_id': video_id
             }
         
-        # Generate summary with ChatGPT
-        summary = generate_summary_with_chatgpt(transcript_content, video_metadata)
-        if not summary:
+        # Generate summary with LLM Judge
+        summary_data = generate_summary_with_llm_judge(transcript_content, video_metadata)
+        if not summary_data:
             logger.warning(f"Failed to generate summary for video {video_id}")
             return {
                 'status': 'summary_generation_failed',
@@ -291,20 +440,21 @@ def transcript_summarizer(cloud_event):
             }
         
         # Save summary to GCS
-        gcs_path = save_summary_to_gcs(summary, video_id)
+        gcs_path = save_summary_to_gcs(summary_data['summary'], video_id)
         if gcs_path:
             # Update video metadata with summary information
             update_video_metadata_with_summary(video_id, gcs_path)
             
             # Update video metadata in BigQuery
-            update_video_metadata_in_bigquery(video_metadata, gcs_path, summary)
+            update_video_metadata_in_bigquery(video_metadata, gcs_path, summary_data['summary'], summary_data['llm_scores'])
             
             logger.info(f"Successfully processed summary for video {video_id}")
             return {
                 'status': 'success',
                 'video_id': video_id,
                 'gcs_path': gcs_path,
-                'summary_length': len(summary)
+                'summary_length': len(summary_data['summary']),
+                'llm_scores': summary_data['llm_scores']
             }
         else:
             logger.error(f"Failed to save summary for video {video_id}")

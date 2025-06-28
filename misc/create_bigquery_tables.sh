@@ -25,7 +25,10 @@ total_views:INTEGER,\
 average_views:FLOAT,\
 processed_at:TIMESTAMP,\
 summary_file:STRING,\
-processing_strategy:STRING || echo "Table ${PRODUCT_SUMMARIES} already exists."
+processing_strategy:STRING,\
+llm_relevance_score:FLOAT,\
+llm_helpfulness_score:FLOAT,\
+llm_conciseness_score:FLOAT || echo "Table ${PRODUCT_SUMMARIES} already exists."
 
 echo "Creating table: ${VIDEO_METADATA}"
 bq mk --table --project_id=${PROJECT_ID} ${DATASET_ID}.${VIDEO_METADATA} \
@@ -42,6 +45,9 @@ transcript_file:STRING,\
 summary_file:STRING,\
 processed_at:TIMESTAMP,\
 summary_content:STRING,\
-summary_processed_at:TIMESTAMP || echo "Table ${VIDEO_METADATA} already exists."
+summary_processed_at:TIMESTAMP,\
+llm_relevance_score:FLOAT,\
+llm_helpfulness_score:FLOAT,\
+llm_conciseness_score:FLOAT || echo "Table ${VIDEO_METADATA} already exists."
 
 echo "✅ BigQuery dataset and tables are ready!" 
