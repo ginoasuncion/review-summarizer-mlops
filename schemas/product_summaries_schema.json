@@ -1,0 +1,42 @@
+[
+  {
+    "name": "search_query",
+    "type": "STRING",
+    "mode": "REQUIRED"
+  },
+  {
+    "name": "summary_content",
+    "type": "STRING",
+    "mode": "NULLABLE"
+  },
+  {
+    "name": "video_count",
+    "type": "INTEGER",
+    "mode": "NULLABLE"
+  },
+  {
+    "name": "video_ids",
+    "type": "STRING",
+    "mode": "REPEATED"
+  },
+  {
+    "name": "llm_relevance_score",
+    "type": "FLOAT64",
+    "mode": "NULLABLE"
+  },
+  {
+    "name": "llm_helpfulness_score",
+    "type": "FLOAT64",
+    "mode": "NULLABLE"
+  },
+  {
+    "name": "llm_conciseness_score",
+    "type": "FLOAT64",
+    "mode": "NULLABLE"
+  },
+  {
+    "name": "created_at",
+    "type": "TIMESTAMP",
+    "mode": "NULLABLE"
+  }
+] 

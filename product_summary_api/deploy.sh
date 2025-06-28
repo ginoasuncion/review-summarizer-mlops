@@ -10,7 +10,7 @@ echo "Building and deploying Product Summary API..."
 
 # Build the Docker image
 echo "Building Docker image..."
-docker build -t $IMAGE_NAME .
+docker build --platform linux/amd64 -t $IMAGE_NAME .
 
 # Push to Google Container Registry
 echo "Pushing to Google Container Registry..."

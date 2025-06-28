@@ -439,8 +439,8 @@ def youtube_data_processor(cloud_event: CloudEvent) -> str:
             return "No content found"
 
         processed_videos = []
-        # Limit to first 5 videos to match max_results from search API
-        max_videos_to_process = 5
+        # Limit to first 3 videos to match max_results from search API
+        max_videos_to_process = 3
         videos_to_process = first_result['content'][:max_videos_to_process]
         
         for video in videos_to_process:

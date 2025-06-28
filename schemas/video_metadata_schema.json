@@ -1,0 +1,97 @@
+[
+  {
+    "name": "video_id",
+    "type": "STRING",
+    "mode": "REQUIRED"
+  },
+  {
+    "name": "title",
+    "type": "STRING",
+    "mode": "NULLABLE"
+  },
+  {
+    "name": "channel_title",
+    "type": "STRING",
+    "mode": "NULLABLE"
+  },
+  {
+    "name": "description",
+    "type": "STRING",
+    "mode": "NULLABLE"
+  },
+  {
+    "name": "published_at",
+    "type": "TIMESTAMP",
+    "mode": "NULLABLE"
+  },
+  {
+    "name": "view_count",
+    "type": "INTEGER",
+    "mode": "NULLABLE"
+  },
+  {
+    "name": "like_count",
+    "type": "INTEGER",
+    "mode": "NULLABLE"
+  },
+  {
+    "name": "comment_count",
+    "type": "INTEGER",
+    "mode": "NULLABLE"
+  },
+  {
+    "name": "duration",
+    "type": "STRING",
+    "mode": "NULLABLE"
+  },
+  {
+    "name": "tags",
+    "type": "STRING",
+    "mode": "REPEATED"
+  },
+  {
+    "name": "category_id",
+    "type": "STRING",
+    "mode": "NULLABLE"
+  },
+  {
+    "name": "default_language",
+    "type": "STRING",
+    "mode": "NULLABLE"
+  },
+  {
+    "name": "default_audio_language",
+    "type": "STRING",
+    "mode": "NULLABLE"
+  },
+  {
+    "name": "search_query",
+    "type": "STRING",
+    "mode": "NULLABLE"
+  },
+  {
+    "name": "summary_available",
+    "type": "BOOLEAN",
+    "mode": "NULLABLE"
+  },
+  {
+    "name": "llm_relevance_score",
+    "type": "FLOAT64",
+    "mode": "NULLABLE"
+  },
+  {
+    "name": "llm_helpfulness_score",
+    "type": "FLOAT64",
+    "mode": "NULLABLE"
+  },
+  {
+    "name": "llm_conciseness_score",
+    "type": "FLOAT64",
+    "mode": "NULLABLE"
+  },
+  {
+    "name": "processed_at",
+    "type": "TIMESTAMP",
+    "mode": "NULLABLE"
+  }
+] 
