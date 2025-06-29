@@ -13,7 +13,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy the application code
 COPY telegram_bot.py .
 
-# Set environment variables (will be overridden by Cloud Run)
+# Set environment variable for the bot token (will be set via Cloud Run)
 ENV TELEGRAM_BOT_TOKEN=
 
 # Run the bot

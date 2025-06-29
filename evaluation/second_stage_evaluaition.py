@@ -7,7 +7,10 @@ from openai import OpenAI
 
 # Load environment variables
 load_dotenv()
-client = OpenAI()
+client = OpenAI(
+    base_url="https://api.studio.nebius.com/v1/",
+    api_key=os.environ.get("NEBIUS_API_KEY")
+)
 os.environ["MLFLOW_TRACKING_URI"] = "http://127.0.0.1:5001"
 api_key = os.getenv("OPENAI_API_KEY")
 if not api_key:
@@ -18,7 +21,7 @@ csv_path = os.path.join(os.path.dirname(__file__), "summarized_products.csv")
 if not os.path.exists(csv_path):
     raise FileNotFoundError(f"CSV file not found at {csv_path}")
 try:
-    df = pd.read_csv(csv_path).sample(n=30, random_state=42)  # Sample 30 rows
+    df = pd.read_csv(csv_path).sample(n=10, random_state=42)  # Sample 30 rows
     if df.empty or "product" not in df.columns or "summaries" not in df.columns:
         raise ValueError("CSV must contain 'product' and 'summaries' columns with data.")
 except Exception as e:
@@ -88,7 +91,7 @@ helpfulness = make_genai_metric(
     definition="How useful is the summary for understanding key pros and cons?",
     grading_prompt="Rate helpfulness from 1 (not useful) to 5 (extremely useful).",
     version="v1",
-    model="openai:/gpt-4",
+    model="microsoft/phi-4",
     parameters={"temperature": 0.0},
     aggregations=["mean"],
     greater_is_better=True,
@@ -99,7 +102,7 @@ relevance = make_genai_metric(
     definition="Does the summary reflect key points from the transcript?",
     grading_prompt="Rate relevance from 1 (unrelated) to 5 (fully relevant).",
     version="v1",
-    model="openai:/gpt-4",
+    model="microsoft/phi-4",
     parameters={"temperature": 0.0},
     aggregations=["mean"],
     greater_is_better=True,
@@ -110,7 +113,7 @@ conciseness = make_genai_metric(
     definition="Is the summary brief and efficient (1-2 sentences)?",
     grading_prompt="Rate conciseness from 1 (wordy) to 5 (very concise).",
     version="v1",
-    model="openai:/gpt-4",
+    model="microsoft/phi-4",
     parameters={"temperature": 0.0},
     aggregations=["mean"],
     greater_is_better=True,
@@ -137,7 +140,7 @@ def summarize(review_text, product, prompt_template, model_name):
 # Run MLflow experiments
 mlflow.set_experiment("summarize-concatenated-eval")
 
-for model_name in ["gpt-3.5-turbo", "gpt-4o"]:
+for model_name in ["google/gemma-2-9b-it-fast", "meta-llama/Meta-Llama-3.1-8B-Instruct"]:
     for prompt_name, prompt_template in PROMPTS:
         run_name = f"{model_name} - {prompt_name}"
         print(f"\nRunning {run_name}...")

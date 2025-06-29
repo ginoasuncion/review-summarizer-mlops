@@ -23,7 +23,7 @@ output_csv = os.path.join(os.path.dirname(__file__), "summarized_products.csv")
 if not os.path.exists(input_csv):
     raise FileNotFoundError(f"Input CSV not found at {input_csv}")
 try:
-    df = pd.read_csv(input_csv).sample(n=30, random_state=42)  # Sample 30 rows
+    df = pd.read_csv(input_csv).sample(n=60, random_state=42)  # Sample 30 rows
     if df.empty or "product" not in df.columns or "full_text" not in df.columns:
         raise ValueError("Input CSV must contain 'product' and 'full_text' columns with data.")
 except Exception as e:
