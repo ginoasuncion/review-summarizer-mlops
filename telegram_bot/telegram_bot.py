@@ -1,4 +1,5 @@
 import os
+
 import requests
 from dotenv import load_dotenv
 from telegram import Update
@@ -19,20 +20,27 @@ if not TELEGRAM_BOT_TOKEN:
 
 API_URL = "https://product-query-api-nxbmt7mfiq-uc.a.run.app/query"
 
+
 # Telegram command: /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "👋 Hi! I can provide summaries of YouTube reviews for shoe models. "
-        "Please enter the name of the shoe model you're interested in (e.g., 'Adidas Ultraboost')."
+        "👋 Hi! I can provide summaries of YouTube"
+        " reviews for shoe models. "
+        "Please enter the name of the "
+        "shoe model you're interested in"
+        " (e.g., 'Adidas Ultraboost')."
     )
+
 
 # Telegram message handler: get summary from API
 async def get_summary(update: Update, context: ContextTypes.DEFAULT_TYPE):
     product_name = update.message.text.strip()
     payload = {"product_name": product_name}
-    
+
     try:
-        response = requests.post(API_URL, headers={"Content-Type": "application/json"}, json=payload)
+        response = requests.post(
+            API_URL, headers={"Content-Type": "application/json"}, json=payload
+        )
         print(f"API Response Status: {response.status_code}")
         print(f"API Response: {response.text}")  # Debug: Print raw response
         if response.status_code == 200:
@@ -49,19 +57,24 @@ async def get_summary(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 # Split message if too long (Telegram limit is 4096 characters)
                 MAX_MESSAGE_LENGTH = 4096
                 while len(message) > MAX_MESSAGE_LENGTH:
-                    split_index = message.rfind('\n', 0, MAX_MESSAGE_LENGTH)
+                    split_index = message.rfind("\n", 0, MAX_MESSAGE_LENGTH)
                     if split_index == -1:
                         split_index = MAX_MESSAGE_LENGTH
                     await update.message.reply_text(message[:split_index])
                     message = message[split_index:]
                 await update.message.reply_text(message)
             else:
-                await update.message.reply_text(f"No summary found for '{product_name}'. Try another model or check the name.")
+                await update.message.reply_text(
+                    f"No summary found for '{product_name}'"
+                )
         else:
-            await update.message.reply_text(f"Error fetching summary (Status: {response.status_code}). Please try again later.")
+            await update.message.reply_text(
+                f"Error fetching summary (Status: {response.status_code})."
+            )
     except Exception as e:
         print(f"Error fetching summary: {e}")
         await update.message.reply_text("⚠️ Sorry, I couldn't process your request.")
+
 
 def main():
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
@@ -72,5 +85,6 @@ def main():
     print("✅ Bot is running...")
     app.run_polling()
 
-if __name__ == "__main__":
+
+if __name__ == "_main_":
     main()
